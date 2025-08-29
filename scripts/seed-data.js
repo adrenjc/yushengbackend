@@ -6,10 +6,18 @@ const bcrypt = require("bcrypt")
 const User = require("../src/models/User")
 const Product = require("../src/models/Product")
 const { logger } = require("../src/utils/logger")
-require("dotenv").config()
 
-// 示例用户数据
-const users = [
+// 加载环境配置
+require("dotenv").config({
+  path:
+    process.env.NODE_ENV === "production"
+      ? ".env.production"
+      : ".env.development",
+})
+require("dotenv").config() // 回退到默认 .env
+
+// 生产环境用户数据（精简版）
+const productionUsers = [
   {
     username: "admin",
     password: "admin123",
@@ -17,6 +25,34 @@ const users = [
     role: "admin",
     department: "技术部",
     position: "系统管理员",
+  },
+  {
+    username: "superadmin",
+    password: "superadmin123",
+    name: "超级管理员",
+    role: "admin",
+    department: "技术部",
+    position: "超级管理员",
+  },
+]
+
+// 开发环境用户数据（完整测试版）
+const developmentUsers = [
+  {
+    username: "admin",
+    password: "admin123",
+    name: "系统管理员",
+    role: "admin",
+    department: "技术部",
+    position: "系统管理员",
+  },
+  {
+    username: "superadmin",
+    password: "superadmin123",
+    name: "超级管理员",
+    role: "admin",
+    department: "技术部",
+    position: "超级管理员",
   },
   {
     username: "reviewer",
@@ -35,6 +71,10 @@ const users = [
     position: "数据录入员",
   },
 ]
+
+// 根据环境选择用户数据
+const users =
+  process.env.NODE_ENV === "production" ? productionUsers : developmentUsers
 
 // 示例商品数据
 const products = [
@@ -257,7 +297,9 @@ async function createProducts(adminUser) {
  */
 async function main() {
   try {
-    console.log("🌱 开始生成示例数据...")
+    const isProduction = process.env.NODE_ENV === "production"
+    console.log(`🌱 开始生成${isProduction ? "生产环境" : "开发环境"}数据...`)
+    console.log(`🔧 当前环境: ${process.env.NODE_ENV || "development"}`)
     console.log(
       "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -277,22 +319,42 @@ async function main() {
     console.log(
       "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
-    console.log("✅ 示例数据生成完成！")
+    console.log(`✅ ${isProduction ? "生产环境" : "开发环境"}数据生成完成！`)
     console.log("")
-    console.log("📋 测试账户信息:")
-    console.log("👤 管理员账户:")
-    console.log("   用户名: admin")
-    console.log("   密码: admin123")
+    console.log("📋 账户信息:")
+
+    if (isProduction) {
+      console.log("👤 管理员账户:")
+      console.log("   用户名: admin")
+      console.log("   密码: YuSheng2024@Admin!")
+      console.log("")
+      console.log("👤 超级管理员账户:")
+      console.log("   用户名: superadmin")
+      console.log("   密码: YuSheng2024@SuperAdmin!")
+      console.log("")
+      console.log("🔒 生产环境账户已创建，请妥善保管密码！")
+    } else {
+      console.log("👤 管理员账户:")
+      console.log("   用户名: admin")
+      console.log("   密码: admin123")
+      console.log("")
+      console.log("👤 超级管理员账户:")
+      console.log("   用户名: superadmin")
+      console.log("   密码: superadmin123")
+      console.log("")
+      console.log("👤 审核员账户:")
+      console.log("   用户名: reviewer")
+      console.log("   密码: reviewer123")
+      console.log("")
+      console.log("👤 操作员账户:")
+      console.log("   用户名: operator")
+      console.log("   密码: operator123")
+      console.log("")
+      console.log("🧪 开发环境测试账户已创建")
+    }
+
     console.log("")
-    console.log("👤 审核员账户:")
-    console.log("   用户名: reviewer")
-    console.log("   密码: reviewer123")
-    console.log("")
-    console.log("👤 操作员账户:")
-    console.log("   用户名: operator")
-    console.log("   密码: operator123")
-    console.log("")
-    console.log("📦 已创建示例用户；未创建任何示例商品（按需导入/新增）")
+    console.log("📦 已创建用户；未创建任何示例商品（按需导入/新增）")
     console.log(
       "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )

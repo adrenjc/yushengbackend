@@ -75,23 +75,4 @@ module.exports = {
       health_check_grace_period: 3000,
     },
   ],
-
-  // 部署配置（可选）
-  deploy: {
-    production: {
-      user: "deploy",
-      host: ["your-server.com"],
-      ref: "origin/main",
-      repo: "git@github.com:username/smart-match-system.git",
-      path: "/opt/smart-match-system",
-      "pre-deploy-local": "",
-      "post-deploy":
-        "npm install && npm run cleanup && pm2 reload ecosystem.config.js",
-      "pre-setup": "",
-      env: {
-        NODE_ENV: "production",
-        PORT: 8080,
-      },
-    },
-  },
 }
