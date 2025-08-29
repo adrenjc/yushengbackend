@@ -17,8 +17,20 @@ module.exports = {
 
       // 环境变量
       env: {
+        NODE_ENV: "development",
+        PORT: 8080,
+      },
+      env_production: {
         NODE_ENV: "production",
         PORT: 8080,
+      },
+      env_development: {
+        NODE_ENV: "development",
+        PORT: 8080,
+        instances: 1,
+        watch: true,
+        watch_delay: 1000,
+        ignore_watch: ["node_modules", "logs", "uploads"],
       },
 
       // 日志配置

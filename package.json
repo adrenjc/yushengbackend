@@ -4,8 +4,10 @@
   "description": "智能商品匹配系统后端API",
   "main": "src/app.js",
   "scripts": {
-    "start": "node src/app.js",
-    "dev": "nodemon src/app.js",
+    "start": "cross-env NODE_ENV=development node src/app.js",
+    "start:prod": "cross-env NODE_ENV=production node src/app.js",
+    "dev": "cross-env NODE_ENV=development nodemon src/app.js",
+    "prod": "npm run pm2:start",
     "test": "jest",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
@@ -16,12 +18,16 @@
     "cleanup": "node scripts/cleanup-files.js",
     "cleanup:report": "node scripts/cleanup-files.js --report",
     "cleanup:dry-run": "node scripts/cleanup-files.js --dry-run",
-    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:start": "pm2 start ecosystem.config.js --env production",
+    "pm2:dev": "pm2 start ecosystem.config.js --env development",
     "pm2:stop": "pm2 stop ecosystem.config.js",
     "pm2:restart": "pm2 restart ecosystem.config.js",
+    "pm2:reload": "pm2 reload ecosystem.config.js",
     "pm2:delete": "pm2 delete ecosystem.config.js",
     "pm2:logs": "pm2 logs",
-    "pm2:monit": "pm2 monit"
+    "pm2:monit": "pm2 monit",
+    "deploy:setup": "npm run setup && npm run pm2:start",
+    "deploy:update": "git pull && npm install && npm run pm2:reload"
   },
   "keywords": [
     "smart-match",
@@ -57,6 +63,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "eslint": "^8.55.0",
     "eslint-config-node": "^4.1.0",
     "eslint-plugin-node": "^11.1.0",
