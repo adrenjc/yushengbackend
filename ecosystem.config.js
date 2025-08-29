@@ -1,5 +1,6 @@
 /**
- * PM2 部署配置
+ * PM2 生产环境配置
+ * 智能商品匹配系统
  */
 module.exports = {
   apps: [
@@ -7,49 +8,63 @@ module.exports = {
       name: "smart-match-api",
       script: "src/app.js",
       cwd: __dirname,
-      instances: "max", // 或指定实例数，如 2
+
+      // 进程配置 - 根据服务器配置调整
+      instances: "max", // 自动使用所有CPU核心
       exec_mode: "cluster",
+      watch: false, // 生产环境关闭文件监控
+      max_memory_restart: "2G", // 内存限制
 
       // 环境变量
       env: {
-        NODE_ENV: "development",
-        PORT: 3001,
-      },
-      env_production: {
         NODE_ENV: "production",
-        PORT: 3001,
-        MONGODB_URI: "mongodb://localhost:27017/smartmatch",
-        REDIS_HOST: "localhost",
-        REDIS_PORT: 6379,
-        JWT_SECRET: "your-production-jwt-secret-change-this",
+        PORT: 8080,
       },
 
       // 日志配置
-      log_file: "./logs/combined.log",
-      out_file: "./logs/out.log",
-      error_file: "./logs/error.log",
-      time: true,
+      error_file: "./logs/pm2-error.log",
+      out_file: "./logs/pm2-out.log",
+      log_file: "./logs/pm2-combined.log",
+      log_date_format: "YYYY-MM-DD HH:mm:ss",
+      merge_logs: true,
+      log_type: "json",
+      max_logs: "10", // 保留最近10个日志文件
 
-      // 重启配置
+      // 重启策略
       autorestart: true,
-      watch: false, // 生产环境建议关闭文件监控
-      max_memory_restart: "1G",
-      restart_delay: 4000,
+      exp_backoff_restart_delay: 100,
+      max_restarts: 15, // 增加重启次数容错
+      min_uptime: "30s", // 最小运行时间
+      restart_delay: 1000,
 
-      // 实例配置
-      min_uptime: "10s",
-      max_restarts: 10,
-
-      // 其他配置
-      kill_timeout: 5000,
+      // 优雅关闭配置
+      kill_timeout: 5000, // 优雅关闭超时时间
+      wait_ready: true,
       listen_timeout: 3000,
+      shutdown_with_message: true,
 
-      // 环境特定配置
-      node_args: process.env.NODE_ENV === "development" ? ["--inspect"] : [],
+      // 性能监控
+      status_interval: 60000, // 60秒收集一次状态
+
+      // Node.js 性能优化参数
+      node_args: [
+        "--max-old-space-size=1536", // 1.5GB内存限制
+        "--optimize-for-size", // 优化内存使用
+        "--max-http-header-size=8192", // HTTP头大小限制
+        "--gc-interval=200", // GC频率控制
+      ],
+
+      // 集群负载均衡
+      increment_var: "PORT",
+      instance_var: "INSTANCE_ID",
+
+      // 健康检查
+      health_check_http: true,
+      health_check_grace_period: 3000,
     },
   ],
 
-  // 部署配置
+  // 部署配置（可选）
   deploy: {
     production: {
       user: "deploy",
@@ -59,10 +74,12 @@ module.exports = {
       path: "/opt/smart-match-system",
       "pre-deploy-local": "",
       "post-deploy":
-        "npm install && pm2 reload ecosystem.config.js --env production",
+        "npm install && npm run cleanup && pm2 reload ecosystem.config.js",
       "pre-setup": "",
+      env: {
+        NODE_ENV: "production",
+        PORT: 8080,
+      },
     },
   },
 }
-
-

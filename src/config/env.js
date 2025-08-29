@@ -10,7 +10,7 @@ dotenv.config()
 const config = {
   // 应用配置
   NODE_ENV: process.env.NODE_ENV || "development",
-  PORT: parseInt(process.env.PORT) || 3002,
+  PORT: parseInt(process.env.PORT) || 8080,
   APP_NAME: process.env.APP_NAME || "智能商品匹配系统",
 
   // 数据库配置

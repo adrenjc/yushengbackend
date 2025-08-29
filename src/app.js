@@ -13,6 +13,7 @@ const config = require("./config/env")
 const database = require("./config/database")
 const { redisManager } = require("./config/redis")
 const { logger, httpLogStream } = require("./utils/logger")
+const schedulerService = require("./services/scheduler.service")
 
 // 导入中间件
 const {
@@ -28,6 +29,7 @@ const productRoutes = require("./routes/product.routes")
 const templateRoutes = require("./routes/template.routes")
 const matchingRoutes = require("./routes/matching.routes")
 const userRoutes = require("./routes/user.routes")
+const systemRoutes = require("./routes/system.routes")
 
 // 创建Express应用
 const app = express()
@@ -197,6 +199,7 @@ app.use("/api/products", productRoutes)
 app.use("/api/templates", templateRoutes)
 app.use("/api/matching", matchingRoutes)
 app.use("/api/users", userRoutes)
+app.use("/api/system", systemRoutes)
 
 /**
  * 数据库错误处理中间件
@@ -225,6 +228,10 @@ const startServer = async () => {
     // 初始化Redis
     logger.info("正在初始化Redis...")
     await redisManager.initialize()
+
+    // 初始化定时任务服务
+    logger.info("正在初始化定时任务服务...")
+    await schedulerService.initialize()
 
     // 启动HTTP服务器
     const server = app.listen(config.PORT, () => {
@@ -258,6 +265,9 @@ const startServer = async () => {
 
           await redisManager.disconnect()
           logger.info("Redis连接已关闭")
+
+          schedulerService.stopAll()
+          logger.info("定时任务服务已停止")
 
           logger.info("应用程序已优雅关闭")
           process.exit(0)
