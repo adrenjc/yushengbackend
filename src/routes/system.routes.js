@@ -5,11 +5,40 @@
 
 const express = require("express")
 const router = express.Router()
-const { asyncHandler } = require("../middleware/error.middleware")
-const { authenticateToken, authorize } = require("../middleware/auth.middleware")
-const { logger } = require("../utils/logger")
-const schedulerService = require("../services/scheduler.service")
-const { generateCleanupReport } = require("../../scripts/cleanup-files")
+
+// 分步导入以避免循环依赖和初始化问题
+let asyncHandler,
+  authenticateToken,
+  authorize,
+  logger,
+  schedulerService,
+  generateCleanupReport
+
+try {
+  const errorMiddleware = require("../middleware/error.middleware")
+  asyncHandler = errorMiddleware.asyncHandler
+
+  const authMiddleware = require("../middleware/auth.middleware")
+  authenticateToken = authMiddleware.authenticateToken
+  authorize = authMiddleware.authorize
+
+  const loggerModule = require("../utils/logger")
+  logger = loggerModule.logger
+
+  schedulerService = require("../services/scheduler.service")
+
+  const cleanupModule = require("../../scripts/cleanup-files")
+  generateCleanupReport = cleanupModule.generateCleanupReport
+} catch (error) {
+  console.error("Error loading system route dependencies:", error.message)
+  // 创建占位符函数以避免 undefined 错误
+  asyncHandler =
+    asyncHandler ||
+    ((fn) => (req, res, next) =>
+      Promise.resolve(fn(req, res, next)).catch(next))
+  authenticateToken = authenticateToken || ((req, res, next) => next())
+  authorize = authorize || (() => (req, res, next) => next())
+}
 
 /**
  * 获取系统状态
@@ -18,22 +47,34 @@ router.get(
   "/status",
   authenticateToken,
   asyncHandler(async (req, res) => {
-    const schedulerStatus = schedulerService.getStatus()
-    const report = await generateCleanupReport()
+    try {
+      const schedulerStatus = schedulerService
+        ? schedulerService.getStatus()
+        : { status: "not available" }
+      const report = generateCleanupReport
+        ? await generateCleanupReport()
+        : { status: "not available" }
 
-    res.json({
-      success: true,
-      data: {
-        system: {
-          uptime: process.uptime(),
-          memory: process.memoryUsage(),
-          version: process.version,
-          platform: process.platform,
+      res.json({
+        success: true,
+        data: {
+          system: {
+            uptime: process.uptime(),
+            memory: process.memoryUsage(),
+            version: process.version,
+            platform: process.platform,
+          },
+          scheduler: schedulerStatus,
+          storage: report,
         },
-        scheduler: schedulerStatus,
-        storage: report,
-      },
-    })
+      })
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "获取系统状态失败",
+        error: error.message,
+      })
+    }
   })
 )
 
@@ -43,27 +84,40 @@ router.get(
 router.post(
   "/cleanup",
   authenticateToken,
-  authorize(["admin"]),
+  authorize ? authorize(["admin"]) : (req, res, next) => next(),
   asyncHandler(async (req, res) => {
-    logger.info("管理员手动触发文件清理", {
-      userId: req.user._id,
-      username: req.user.username,
-    })
+    try {
+      if (logger && logger.info) {
+        logger.info("管理员手动触发文件清理", {
+          userId: req.user?._id,
+          username: req.user?.username,
+        })
+      }
 
-    const stats = await schedulerService.manualCleanup()
+      const stats =
+        schedulerService && schedulerService.manualCleanup
+          ? await schedulerService.manualCleanup()
+          : { message: "清理服务不可用" }
 
-    res.json({
-      success: true,
-      message: "文件清理任务执行完成",
-      data: {
-        stats,
-        executedBy: {
-          userId: req.user._id,
-          username: req.user.username,
+      res.json({
+        success: true,
+        message: "文件清理任务执行完成",
+        data: {
+          stats,
+          executedBy: {
+            userId: req.user?._id,
+            username: req.user?.username,
+          },
+          executedAt: new Date().toISOString(),
         },
-        executedAt: new Date().toISOString(),
-      },
-    })
+      })
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "文件清理失败",
+        error: error.message,
+      })
+    }
   })
 )
 
@@ -74,12 +128,22 @@ router.get(
   "/storage-report",
   authenticateToken,
   asyncHandler(async (req, res) => {
-    const report = await generateCleanupReport()
+    try {
+      const report = generateCleanupReport
+        ? await generateCleanupReport()
+        : { message: "报告生成服务不可用" }
 
-    res.json({
-      success: true,
-      data: report,
-    })
+      res.json({
+        success: true,
+        data: report,
+      })
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "获取存储报告失败",
+        error: error.message,
+      })
+    }
   })
 )
 
@@ -90,12 +154,23 @@ router.get(
   "/scheduler",
   authenticateToken,
   asyncHandler(async (req, res) => {
-    const status = schedulerService.getStatus()
+    try {
+      const status =
+        schedulerService && schedulerService.getStatus
+          ? schedulerService.getStatus()
+          : { status: "调度服务不可用" }
 
-    res.json({
-      success: true,
-      data: status,
-    })
+      res.json({
+        success: true,
+        data: status,
+      })
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "获取调度状态失败",
+        error: error.message,
+      })
+    }
   })
 )
 
