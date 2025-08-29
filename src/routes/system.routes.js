@@ -6,7 +6,7 @@
 const express = require("express")
 const router = express.Router()
 const { asyncHandler } = require("../middleware/error.middleware")
-const { authenticate, authorize } = require("../middleware/auth.middleware")
+const { authenticateToken, authorize } = require("../middleware/auth.middleware")
 const { logger } = require("../utils/logger")
 const schedulerService = require("../services/scheduler.service")
 const { generateCleanupReport } = require("../../scripts/cleanup-files")
@@ -16,7 +16,7 @@ const { generateCleanupReport } = require("../../scripts/cleanup-files")
  */
 router.get(
   "/status",
-  authenticate,
+  authenticateToken,
   asyncHandler(async (req, res) => {
     const schedulerStatus = schedulerService.getStatus()
     const report = await generateCleanupReport()
@@ -42,7 +42,7 @@ router.get(
  */
 router.post(
   "/cleanup",
-  authenticate,
+  authenticateToken,
   authorize(["admin"]),
   asyncHandler(async (req, res) => {
     logger.info("管理员手动触发文件清理", {
@@ -72,7 +72,7 @@ router.post(
  */
 router.get(
   "/storage-report",
-  authenticate,
+  authenticateToken,
   asyncHandler(async (req, res) => {
     const report = await generateCleanupReport()
 
@@ -88,7 +88,7 @@ router.get(
  */
 router.get(
   "/scheduler",
-  authenticate,
+  authenticateToken,
   asyncHandler(async (req, res) => {
     const status = schedulerService.getStatus()
 

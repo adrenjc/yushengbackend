@@ -26,7 +26,8 @@
     "pm2:delete": "pm2 delete ecosystem.config.js",
     "pm2:logs": "pm2 logs",
     "pm2:monit": "pm2 monit",
-    "deploy:setup": "npm run setup && npm run pm2:start",
+    "setup:env": "node scripts/setup-env.js",
+    "deploy:setup": "npm run setup:env && npm run setup && npm run pm2:start",
     "deploy:update": "git pull && npm install && npm run pm2:reload"
   },
   "keywords": [

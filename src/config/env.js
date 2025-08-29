@@ -4,7 +4,15 @@
 const dotenv = require("dotenv")
 const path = require("path")
 
-// 加载环境变量
+// 根据环境动态加载不同的环境变量文件
+dotenv.config({
+  path:
+    process.env.NODE_ENV === "production"
+      ? ".env.production"
+      : ".env.development",
+})
+
+// 如果找不到特定环境文件，则回退到默认 .env 文件
 dotenv.config()
 
 const config = {
