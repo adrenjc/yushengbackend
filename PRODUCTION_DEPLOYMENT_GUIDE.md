@@ -7,6 +7,7 @@
 ## ⚠️ 重要警告
 
 **数据清理是不可逆的操作！请务必：**
+
 1. 📋 确认这是生产环境部署
 2. 💾 完成数据备份
 3. 🔍 仔细检查清理范围
@@ -15,12 +16,14 @@
 ## 📊 清理范围
 
 ### 将被删除的数据：
+
 - ✂️ 所有商品模板
 - ✂️ 所有商品档案数据
 - ✂️ 所有匹配任务和记录
 - ✂️ 所有上传的文件
 
 ### 将被保留的数据：
+
 - ✅ 用户账户信息
 - ✅ 系统配置数据
 - ✅ 日志文件
@@ -38,6 +41,7 @@ node scripts/backup-data.js
 ```
 
 备份文件将保存在 `backups/backup-[timestamp]/` 目录中，包含：
+
 - `templates.json` - 模板数据
 - `products.json` - 商品数据
 - `matching-tasks.json` - 匹配任务
@@ -58,11 +62,13 @@ node scripts/production-cleanup.js
 脚本将要求您进行以下确认：
 
 1. **环境确认**
+
    ```
    输入: production
    ```
 
 2. **备份确认**
+
    ```
    输入: backed-up
    ```
@@ -112,28 +118,34 @@ node scripts/production-cleanup.js 2>&1 | tee production-cleanup.log
 清理完成后，请验证以下功能：
 
 ### 1. 用户登录
+
 - [ ] 管理员账户可正常登录
 - [ ] 用户权限功能正常
 
 ### 2. 模板管理
+
 - [ ] 可以创建新模板
 - [ ] 模板列表为空（清理成功）
 
 ### 3. 商品管理
+
 - [ ] 可以导入商品数据
 - [ ] 商品列表为空（清理成功）
 
 ### 4. 匹配功能
+
 - [ ] 可以创建匹配任务
 - [ ] 匹配记录为空（清理成功）
 
 ### 5. 文件上传
+
 - [ ] 可以正常上传文件
-- [ ] uploads目录为空（清理成功）
+- [ ] uploads 目录为空（清理成功）
 
 ## 🚨 故障排除
 
-### 问题1：数据库连接失败
+### 问题 1：数据库连接失败
+
 ```bash
 # 检查MongoDB服务状态
 sudo systemctl status mongod
@@ -142,14 +154,16 @@ sudo systemctl status mongod
 cat src/config/env.js
 ```
 
-### 问题2：权限不足
+### 问题 2：权限不足
+
 ```bash
 # 确保有足够的文件系统权限
 sudo chown -R $(whoami) uploads/
 sudo chown -R $(whoami) backups/
 ```
 
-### 问题3：清理不完整
+### 问题 3：清理不完整
+
 ```bash
 # 手动检查数据库
 mongo
