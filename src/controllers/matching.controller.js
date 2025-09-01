@@ -1079,11 +1079,11 @@ const getAllMatchingRecords = asyncHandler(async (req, res) => {
     MatchingRecord.find(filters)
       .populate(
         "candidates.productId",
-        "name brand companyPrice boxCode barcode"
+        "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
       )
       .populate(
         "selectedMatch.productId",
-        "name brand companyPrice boxCode barcode"
+        "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
       )
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
@@ -1527,7 +1527,10 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
 
   // 获取所有匹配记录
   const records = await MatchingRecord.find({ taskId })
-    .populate("selectedMatch.productId")
+    .populate(
+      "selectedMatch.productId",
+      "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
+    )
     .sort({ "metadata.source.row": 1 })
 
   if (records.length === 0) {
@@ -1585,7 +1588,10 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
   })
 
   // 设置响应头
-  const filename = `匹配结果_${task.originalFilename || "结果"}_${new Date()
+  const baseFilename = task.originalFilename
+    ? path.parse(task.originalFilename).name // 去掉扩展名
+    : "结果"
+  const filename = `匹配结果_${baseFilename}_${new Date()
     .toISOString()
     .slice(0, 10)}.xlsx`
   res.setHeader(
@@ -1631,7 +1637,10 @@ const getMatchedProducts = asyncHandler(async (req, res) => {
       status: "confirmed",
       "selectedMatch.productId": { $exists: true },
     })
-      .populate("selectedMatch.productId")
+      .populate(
+        "selectedMatch.productId",
+        "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
+      )
       .populate("taskId", "originalFilename createdAt")
       .sort({ "reviewHistory.0.timestamp": -1 })
 

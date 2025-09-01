@@ -11,8 +11,7 @@ const {
   NotFoundError,
   ValidationError,
 } = require("../middleware/error.middleware")
-const { logOperation } = require("../utils/logger")
-const logger = require("../utils/logger")
+const { logOperation, logger } = require("../utils/logger")
 
 /**
  * 获取模板列表

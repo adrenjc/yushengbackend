@@ -127,7 +127,13 @@ const errorHandler = (err, req, res, next) => {
 
   // 语法错误处理
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
-    error = new BusinessError("请求体格式错误", 400)
+    // 检查是否是文件上传请求，如果是则使用更通用的错误描述
+    const contentType = req.get("Content-Type") || ""
+    if (contentType.includes("multipart/form-data")) {
+      error = new BusinessError("文件上传请求处理失败", 400)
+    } else {
+      error = new BusinessError("请求体格式错误", 400)
+    }
   }
 
   // 设置默认错误信息
@@ -179,11 +185,42 @@ const notFoundHandler = (req, res, next) => {
  */
 const bodyParserErrorHandler = (err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
+    const contentType = req.get("Content-Type") || ""
+
+    // 检查是否是文件上传请求（包括错误设置的Content-Type）
+    const isFileUpload =
+      contentType.includes("multipart/form-data") ||
+      (req.body &&
+        typeof req.body === "string" &&
+        req.body.includes("Content-Disposition: form-data"))
+
+    if (isFileUpload) {
+      logger.warn("检测到文件上传请求但Content-Type错误设置:", {
+        expectedContentType: "multipart/form-data",
+        actualContentType: contentType,
+        url: req.originalUrl,
+        method: req.method,
+        ip: req.ip,
+      })
+
+      return res.status(400).json({
+        success: false,
+        message: "文件上传请求Content-Type设置错误",
+        error: {
+          statusCode: 400,
+          code: "INVALID_CONTENT_TYPE",
+          details:
+            "文件上传请求请不要手动设置Content-Type，让浏览器自动设置multipart/form-data",
+        },
+      })
+    }
+
     logger.error("请求体解析错误:", {
       error: err.message,
       url: req.originalUrl,
       method: req.method,
       ip: req.ip,
+      contentType,
     })
 
     return res.status(400).json({

@@ -7,6 +7,7 @@ const {
   getProductById,
   createProduct,
   updateProduct,
+  updateProductStatus,
   deleteProduct,
   hardDeleteProduct,
   hardDeleteProducts,
@@ -211,6 +212,20 @@ router.put(
     ...productUpdateSchema,
   }),
   updateProduct
+)
+
+// 更新商品状态
+router.put(
+  "/:id/status",
+  authenticateToken,
+  authorize("product.write"),
+  validateRequest({
+    ...objectIdSchema,
+    body: require("joi").object({
+      isActive: require("joi").boolean().required(),
+    }),
+  }),
+  updateProductStatus
 )
 
 // 删除商品（软删除）

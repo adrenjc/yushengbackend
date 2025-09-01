@@ -127,17 +127,46 @@ const productCreateSchema = {
       "string.max": "品牌不能超过100个字符",
       "any.required": "品牌不能为空",
     }),
-    keywords: Joi.array().items(Joi.string().max(50)).max(20).default([]),
-    category: Joi.string().max(100).allow(""),
+    company: Joi.string().max(100).allow(""),
+    productCode: Joi.string().max(50).allow(""),
+    boxCode: Joi.string().max(50).allow(""),
+    productType: Joi.string().max(50).allow(""),
+    packageType: Joi.string().max(50).allow(""),
     specifications: Joi.object({
-      packageType: Joi.string().max(50).allow(""),
-      size: Joi.string().max(50).allow(""),
-      price: Joi.number().min(0).allow(null),
-      unit: Joi.string().max(20).default("盒"),
+      circumference: Joi.number().min(0).allow(null),
+      length: Joi.string().max(100).allow(""),
+      packageQuantity: Joi.number().min(0).allow(null),
     }).default({}),
-    wholesaleName: Joi.string().max(200).allow(""),
-    wholesalePrice: Joi.number().min(0).allow(null),
+    launchDate: Joi.alternatives().try(
+      Joi.date(),
+      Joi.string().isoDate(),
+      Joi.string().allow("")
+    ),
+    chemicalContent: Joi.object({
+      tarContent: Joi.number().min(0).allow(null),
+      nicotineContent: Joi.number().min(0).allow(null),
+      carbonMonoxideContent: Joi.number().min(0).allow(null),
+    }).default({}),
+    appearance: Joi.object({
+      color: Joi.string().max(50).allow(""),
+    }).default({}),
+    features: Joi.object({
+      hasPop: Joi.boolean(),
+    }).default({}),
+    pricing: Joi.object({
+      priceCategory: Joi.string().max(50).allow(""),
+      retailPrice: Joi.number().min(0).allow(null),
+      unit: Joi.string().max(20).allow(""),
+      companyPrice: Joi.number().min(0).allow(null),
+    }).default({}),
+    wholesale: Joi.object({
+      name: Joi.string().max(200).allow(""),
+      price: Joi.number().min(0).allow(null),
+    }).default({}),
+    category: Joi.string().max(100).allow(""),
+    keywords: Joi.array().items(Joi.string().max(50)).max(20).default([]),
     tags: Joi.array().items(Joi.string().max(50)).max(10).default([]),
+    isActive: Joi.boolean().default(true),
   }),
 }
 
@@ -146,18 +175,47 @@ const productCreateSchema = {
  */
 const productUpdateSchema = {
   body: Joi.object({
+    templateId: Joi.string().pattern(/^[0-9a-fA-F]{24}$/),
     name: Joi.string().min(1).max(200),
     brand: Joi.string().min(1).max(100),
-    keywords: Joi.array().items(Joi.string().max(50)).max(20),
-    category: Joi.string().max(100).allow(""),
+    company: Joi.string().max(100).allow(""),
+    productCode: Joi.string().max(50).allow(""),
+    boxCode: Joi.string().max(50).allow(""),
+    productType: Joi.string().max(50).allow(""),
+    packageType: Joi.string().max(50).allow(""),
     specifications: Joi.object({
-      packageType: Joi.string().max(50).allow(""),
-      size: Joi.string().max(50).allow(""),
-      price: Joi.number().min(0).allow(null),
-      unit: Joi.string().max(20),
+      circumference: Joi.number().min(0).allow(null),
+      length: Joi.string().max(100).allow(""),
+      packageQuantity: Joi.number().min(0).allow(null),
     }),
-    wholesaleName: Joi.string().max(200).allow(""),
-    wholesalePrice: Joi.number().min(0).allow(null),
+    launchDate: Joi.alternatives().try(
+      Joi.date(),
+      Joi.string().isoDate(),
+      Joi.string().allow("")
+    ),
+    chemicalContent: Joi.object({
+      tarContent: Joi.number().min(0).allow(null),
+      nicotineContent: Joi.number().min(0).allow(null),
+      carbonMonoxideContent: Joi.number().min(0).allow(null),
+    }),
+    appearance: Joi.object({
+      color: Joi.string().max(50).allow(""),
+    }),
+    features: Joi.object({
+      hasPop: Joi.boolean(),
+    }),
+    pricing: Joi.object({
+      priceCategory: Joi.string().max(50).allow(""),
+      retailPrice: Joi.number().min(0).allow(null),
+      unit: Joi.string().max(20).allow(""),
+      companyPrice: Joi.number().min(0).allow(null),
+    }),
+    wholesale: Joi.object({
+      name: Joi.string().max(200).allow(""),
+      price: Joi.number().min(0).allow(null),
+    }),
+    category: Joi.string().max(100).allow(""),
+    keywords: Joi.array().items(Joi.string().max(50)).max(20),
     tags: Joi.array().items(Joi.string().max(50)).max(10),
     isActive: Joi.boolean(),
   }).min(1), // 至少要有一个字段
@@ -235,6 +293,35 @@ const queryParamsSchema = {
     status: Joi.string().max(50).allow(""),
     startDate: Joi.date().iso().allow(""),
     endDate: Joi.date().iso().min(Joi.ref("startDate")).allow(""),
+
+    // 商品过滤参数
+    isActive: Joi.string().valid("true", "false", "all").allow(""),
+    brand: Joi.string().max(100).allow(""),
+    company: Joi.string().max(100).allow(""),
+    productType: Joi.string().max(50).allow(""),
+    packageType: Joi.string().max(50).allow(""),
+    priceCategory: Joi.string().max(50).allow(""),
+    category: Joi.string().max(100).allow(""),
+    color: Joi.string().max(50).allow(""),
+    hasPop: Joi.string().valid("true", "false", "all").allow(""),
+
+    // 价格范围
+    priceMin: Joi.number().min(0).allow(""),
+    priceMax: Joi.number().min(0).allow(""),
+
+    // 范围参数（支持对象形式）
+    "circumferenceRange.min": Joi.number().min(0).allow(""),
+    "circumferenceRange.max": Joi.number().min(0).allow(""),
+    "packageQuantityRange.min": Joi.number().min(0).allow(""),
+    "packageQuantityRange.max": Joi.number().min(0).allow(""),
+    "tarContentRange.min": Joi.number().min(0).allow(""),
+    "tarContentRange.max": Joi.number().min(0).allow(""),
+    "nicotineContentRange.min": Joi.number().min(0).allow(""),
+    "nicotineContentRange.max": Joi.number().min(0).allow(""),
+    "retailPriceRange.min": Joi.number().min(0).allow(""),
+    "retailPriceRange.max": Joi.number().min(0).allow(""),
+    "launchDateRange.start": Joi.string().allow(""),
+    "launchDateRange.end": Joi.string().allow(""),
   }),
 }
 
@@ -258,7 +345,7 @@ const objectIdSchema = {
  */
 const batchOperationSchema = {
   body: Joi.object({
-    ids: Joi.array()
+    productIds: Joi.array()
       .items(Joi.string().pattern(/^[0-9a-fA-F]{24}$/))
       .min(1)
       .max(1000)
@@ -266,15 +353,23 @@ const batchOperationSchema = {
       .messages({
         "array.min": "至少选择一个项目",
         "array.max": "批量操作最多支持1000个项目",
-        "any.required": "ID列表不能为空",
+        "any.required": "商品ID列表不能为空",
       }),
-    action: Joi.string()
+    operation: Joi.string()
       .valid("confirm", "reject", "delete", "activate", "deactivate")
       .required()
       .messages({
         "any.only": "操作类型不正确",
         "any.required": "操作类型不能为空",
       }),
+    templateId: Joi.string()
+      .pattern(/^[0-9a-fA-F]{24}$/)
+      .required()
+      .messages({
+        "string.pattern.base": "模板ID格式不正确",
+        "any.required": "模板ID不能为空",
+      }),
+    data: Joi.object().allow(null),
     note: Joi.string().max(500).allow(""),
   }),
 }

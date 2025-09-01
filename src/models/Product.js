@@ -1,5 +1,5 @@
 /**
- * 商品档案数据模型
+ * 商品档案数据模型 - 重新设计基于CSV字段
  */
 const mongoose = require("mongoose")
 
@@ -13,19 +13,140 @@ const ProductSchema = new mongoose.Schema(
       index: true,
     },
 
-    // 基本信息
+    // === 基本信息 ===
     name: {
       type: String,
       required: [true, "商品名称不能为空"],
       index: true,
       trim: true,
+      comment: "商品名称",
     },
     brand: {
       type: String,
       required: [true, "品牌不能为空"],
       index: true,
       trim: true,
+      comment: "品牌",
     },
+
+    // === 编码信息 ===
+    productCode: {
+      type: String,
+      index: true,
+      trim: true,
+      comment: "产品编码",
+    },
+    boxCode: {
+      type: String,
+      index: true,
+      trim: true,
+      comment: "盒码编码",
+    },
+
+    // === 产品规格 ===
+    productType: {
+      type: String,
+      trim: true,
+      comment: "产品类型(如:烤烟型、混合型等)",
+    },
+    packageType: {
+      type: String,
+      trim: true,
+      comment: "包装类型(如:条盒硬盒、条盒软盒等)",
+    },
+
+    // === 物理规格 ===
+    specifications: {
+      circumference: {
+        type: Number,
+        comment: "烟支周长(mm)",
+      },
+      length: {
+        type: String,
+        trim: true,
+        comment: "烟支长度(如:84.0(30+54) mm)",
+      },
+      packageQuantity: {
+        type: Number,
+        comment: "包装数量",
+      },
+    },
+
+    // === 时间信息 ===
+    launchDate: {
+      type: Date,
+      comment: "上市时间",
+    },
+
+    // === 化学成分 ===
+    chemicalContent: {
+      tarContent: {
+        type: Number,
+        comment: "焦油含量(mg)",
+      },
+      nicotineContent: {
+        type: Number,
+        comment: "烟气烟碱量(mg)",
+      },
+      carbonMonoxideContent: {
+        type: Number,
+        comment: "烟气一氧化碳量(mg)",
+      },
+    },
+
+    // === 外观属性 ===
+    appearance: {
+      color: {
+        type: String,
+        trim: true,
+        comment: "颜色",
+      },
+    },
+
+    // === 生产信息 ===
+    company: {
+      type: String,
+      trim: true,
+      index: true,
+      comment: "所属企业",
+    },
+
+    // === 特殊属性 ===
+    features: {
+      hasPop: {
+        type: Boolean,
+        default: false,
+        comment: "是否爆珠",
+      },
+    },
+
+    // === 价格信息 ===
+    pricing: {
+      priceCategory: {
+        type: String,
+        trim: true,
+        enum: ["一类", "二类", "三类", "四类", "五类"],
+        comment: "价格类型",
+      },
+      retailPrice: {
+        type: Number,
+        min: [0, "零售价不能为负数"],
+        comment: "零售价",
+      },
+      unit: {
+        type: String,
+        default: "元/条",
+        trim: true,
+        comment: "单位",
+      },
+      companyPrice: {
+        type: Number,
+        min: [0, "公司价不能为负数"],
+        comment: "公司价",
+      },
+    },
+
+    // === 附加信息 ===
     keywords: [
       {
         type: String,
@@ -39,59 +160,26 @@ const ProductSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // 编码信息
-    boxCode: {
-      type: String,
-      trim: true,
-      index: true, // 盒码
-    },
-    barcode: {
-      type: String,
-      trim: true,
-      index: true, // 条码
-    },
-    companyPrice: {
-      type: Number,
-      min: [0, "公司价不能为负数"], // 公司价
-    },
-
-    // 规格信息
-    specifications: {
-      packageType: {
+    // === 批发相关信息 ===
+    wholesale: {
+      name: {
         type: String,
-        trim: true, // 包装类型：盒、条、包等
-      },
-      size: {
-        type: String,
-        trim: true, // 规格：20支、10包等
+        trim: true,
+        comment: "批发商品名称",
       },
       price: {
         type: Number,
-        min: [0, "价格不能为负数"], // 建议零售价
-      },
-      unit: {
-        type: String,
-        default: "盒",
-        trim: true, // 单位
+        min: [0, "批发价格不能为负数"],
+        comment: "批发价格",
       },
     },
 
-    // 批发相关信息
-    wholesaleName: {
-      type: String,
-      trim: true, // 批发商品名称
-    },
-    wholesalePrice: {
-      type: Number,
-      min: [0, "批发价格不能为负数"],
-    },
-
-    // 匹配学习相关
+    // === 匹配学习相关 ===
     matchingHistory: [
       {
-        originalName: String, // 原始口语化名称
-        confidence: Number, // 匹配置信度
-        confirmedAt: Date, // 确认时间
+        originalName: String,
+        confidence: Number,
+        confirmedAt: Date,
         confirmedBy: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "User",
@@ -99,7 +187,7 @@ const ProductSchema = new mongoose.Schema(
       },
     ],
 
-    // 状态管理
+    // === 状态管理 ===
     isActive: {
       type: Boolean,
       default: true,
@@ -111,14 +199,14 @@ const ProductSchema = new mongoose.Schema(
       },
     ],
 
-    // 元数据
+    // === 元数据 ===
     metadata: {
       source: {
         type: String,
         enum: ["manual", "import", "system"],
         default: "manual",
       },
-      importBatch: String, // 导入批次号
+      importBatch: String,
       lastUpdatedBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
@@ -126,47 +214,72 @@ const ProductSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: true, // 自动添加createdAt和updatedAt
+    timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
   }
 )
 
-// 创建复合索引
-ProductSchema.index({ name: "text", brand: "text", keywords: "text" }) // 全文搜索
-ProductSchema.index({ brand: 1, category: 1 }) // 品牌和分类组合查询
-ProductSchema.index({ "specifications.price": 1 }) // 价格范围查询
-ProductSchema.index({ isActive: 1, updatedAt: -1 }) // 活跃商品排序
+// === 索引配置 ===
+ProductSchema.index({ name: "text", brand: "text", keywords: "text" })
+ProductSchema.index({ brand: 1, company: 1 })
+ProductSchema.index({ "pricing.retailPrice": 1 })
+ProductSchema.index({ "pricing.priceCategory": 1 })
+ProductSchema.index({ productType: 1 })
+ProductSchema.index({ isActive: 1, updatedAt: -1 })
+// 注释掉重复的索引，因为字段定义中已经有 index: true
+// ProductSchema.index({ productCode: 1 })
+// ProductSchema.index({ boxCode: 1 })
+ProductSchema.index({ launchDate: -1 })
 
-// 虚拟字段：完整显示名称
+// === 虚拟字段 ===
 ProductSchema.virtual("displayName").get(function () {
   const parts = [this.brand, this.name]
-  if (this.specifications?.packageType) {
-    parts.push(`(${this.specifications.packageType})`)
+  if (this.packageType) {
+    parts.push(`(${this.packageType})`)
   }
   return parts.join(" ")
 })
 
-// 虚拟字段：搜索关键词
-ProductSchema.virtual("searchKeywords").get(function () {
-  const keywords = [
-    this.name,
-    this.brand,
-    ...(this.keywords || []),
-    this.specifications?.packageType,
-    this.specifications?.size,
-  ].filter(Boolean)
-
-  return keywords.join(" ")
+ProductSchema.virtual("fullSpecification").get(function () {
+  const specs = []
+  if (this.specifications?.circumference) {
+    specs.push(`周长${this.specifications.circumference}mm`)
+  }
+  if (this.specifications?.length) {
+    specs.push(`长度${this.specifications.length}`)
+  }
+  if (this.specifications?.packageQuantity) {
+    specs.push(`${this.specifications.packageQuantity}支装`)
+  }
+  return specs.join(" / ")
 })
 
-// 静态方法：搜索商品
+ProductSchema.virtual("chemicalInfo").get(function () {
+  if (!this.chemicalContent) return ""
+  const info = []
+  if (this.chemicalContent.tarContent) {
+    info.push(`焦油${this.chemicalContent.tarContent}mg`)
+  }
+  if (this.chemicalContent.nicotineContent) {
+    info.push(`烟碱${this.chemicalContent.nicotineContent}mg`)
+  }
+  if (this.chemicalContent.carbonMonoxideContent) {
+    info.push(`一氧化碳${this.chemicalContent.carbonMonoxideContent}mg`)
+  }
+  return info.join(" / ")
+})
+
+// === 静态方法 ===
 ProductSchema.statics.searchProducts = function (query, options = {}) {
   const {
     brand,
-    category,
+    company,
+    productType,
+    priceCategory,
     priceMin,
     priceMax,
+    hasPop,
     limit = 50,
     page = 1,
     sortBy = "updatedAt",
@@ -191,12 +304,16 @@ ProductSchema.statics.searchProducts = function (query, options = {}) {
 
   // 过滤条件
   const matchConditions = { isActive: true }
-  if (brand) matchConditions.brand = brand
-  if (category) matchConditions.category = category
+  if (brand) matchConditions.brand = new RegExp(brand, "i")
+  if (company) matchConditions.company = new RegExp(company, "i")
+  if (productType) matchConditions.productType = productType
+  if (priceCategory) matchConditions["pricing.priceCategory"] = priceCategory
+  if (hasPop !== undefined) matchConditions["features.hasPop"] = hasPop
+
   if (priceMin || priceMax) {
-    matchConditions["specifications.price"] = {}
-    if (priceMin) matchConditions["specifications.price"].$gte = priceMin
-    if (priceMax) matchConditions["specifications.price"].$lte = priceMax
+    matchConditions["pricing.retailPrice"] = {}
+    if (priceMin) matchConditions["pricing.retailPrice"].$gte = priceMin
+    if (priceMax) matchConditions["pricing.retailPrice"].$lte = priceMax
   }
 
   aggregation.push({ $match: matchConditions })
@@ -217,36 +334,43 @@ ProductSchema.statics.searchProducts = function (query, options = {}) {
   return this.aggregate(aggregation)
 }
 
-// 静态方法：按品牌获取商品
-ProductSchema.statics.getByBrand = function (brand, limit = 20) {
-  return this.find({
-    brand: new RegExp(brand, "i"),
-    isActive: true,
-  })
-    .sort({ updatedAt: -1 })
-    .limit(limit)
+// 获取品牌统计
+ProductSchema.statics.getBrandStats = function (templateId) {
+  return this.aggregate([
+    {
+      $match: {
+        templateId: mongoose.Types.ObjectId(templateId),
+        isActive: true,
+      },
+    },
+    { $group: { _id: "$brand", count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+  ])
 }
 
-// 静态方法：相似商品推荐
-ProductSchema.statics.findSimilar = function (productId, limit = 5) {
-  return this.findById(productId).then((product) => {
-    if (!product) return []
-
-    return this.find({
-      _id: { $ne: productId },
-      $or: [
-        { brand: product.brand },
-        { category: product.category },
-        { keywords: { $in: product.keywords || [] } },
-      ],
-      isActive: true,
-    })
-      .sort({ updatedAt: -1 })
-      .limit(limit)
-  })
+// 获取价格分布
+ProductSchema.statics.getPriceDistribution = function (templateId) {
+  return this.aggregate([
+    {
+      $match: {
+        templateId: mongoose.Types.ObjectId(templateId),
+        isActive: true,
+      },
+    },
+    {
+      $group: {
+        _id: "$pricing.priceCategory",
+        count: { $sum: 1 },
+        avgPrice: { $avg: "$pricing.retailPrice" },
+        minPrice: { $min: "$pricing.retailPrice" },
+        maxPrice: { $max: "$pricing.retailPrice" },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ])
 }
 
-// 实例方法：更新匹配历史
+// === 实例方法 ===
 ProductSchema.methods.addMatchingHistory = function (
   originalName,
   confidence,
@@ -259,7 +383,6 @@ ProductSchema.methods.addMatchingHistory = function (
     confirmedBy: userId,
   })
 
-  // 只保留最近20条历史记录
   if (this.matchingHistory.length > 20) {
     this.matchingHistory = this.matchingHistory.slice(-20)
   }
@@ -267,7 +390,7 @@ ProductSchema.methods.addMatchingHistory = function (
   return this.save()
 }
 
-// 中间件：保存前处理
+// === 中间件 ===
 ProductSchema.pre("save", function (next) {
   // 自动生成搜索关键词
   if (this.isModified("name") || this.isModified("brand")) {
@@ -276,20 +399,16 @@ ProductSchema.pre("save", function (next) {
       ...this.brand.split(/\s+/),
     ].filter((keyword) => keyword.length > 1)
 
-    // 合并现有关键词，去重
     this.keywords = [...new Set([...(this.keywords || []), ...autoKeywords])]
   }
 
   next()
 })
 
-// 中间件：删除前清理
 ProductSchema.pre(
   "deleteOne",
   { document: true, query: false },
   function (next) {
-    // 这里可以添加删除前的清理逻辑
-    // 比如检查是否有相关的匹配记录等
     next()
   }
 )

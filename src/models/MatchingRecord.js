@@ -490,8 +490,14 @@ MatchingRecordSchema.statics.getPendingReviews = function (
 
   return this.find(query)
     .populate("taskId", "filename status")
-    .populate("candidates.productId", "name brand specifications")
-    .populate("selectedMatch.productId", "name brand")
+    .populate(
+      "candidates.productId",
+      "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
+    )
+    .populate(
+      "selectedMatch.productId",
+      "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
+    )
     .populate("selectedMatch.confirmedBy", "name email")
     .sort({ priority: -1, createdAt: 1 })
     .limit(limit)
@@ -507,7 +513,10 @@ MatchingRecordSchema.statics.getHighRiskRecords = function (taskId) {
       { candidates: { $size: 0 } },
     ],
   })
-    .populate("candidates.productId", "name brand")
+    .populate(
+      "candidates.productId",
+      "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
+    )
     .sort({ priority: -1, "candidates.0.score.total": 1 })
 }
 

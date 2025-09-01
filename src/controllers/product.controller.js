@@ -1,6 +1,7 @@
 /**
- * 商品管理控制器
+ * 商品管理控制器 - 支持新字段结构
  */
+const mongoose = require("mongoose")
 const Product = require("../models/Product")
 const ProductTemplate = require("../models/ProductTemplate")
 const { logger, logOperation } = require("../utils/logger")
@@ -23,6 +24,12 @@ const getProducts = asyncHandler(async (req, res) => {
     limit = 20,
     search = "",
     brand = "",
+    company = "",
+    productType = "",
+    priceCategory = "",
+    priceMin,
+    priceMax,
+    hasPop,
     category = "",
     isActive,
     sort = "updatedAt",
@@ -39,19 +46,42 @@ const getProducts = asyncHandler(async (req, res) => {
   }
   query.templateId = templateId
 
-  // 默认仅返回启用商品；只有当显式传入 isActive 时才按传值过滤
-  if (isActive === undefined) {
-    query.isActive = true
-  } else {
+  // 状态过滤 - 默认显示所有商品
+  if (isActive !== undefined && isActive !== "all") {
     query.isActive = isActive === "true"
   }
 
+  // 基本筛选
   if (brand) {
     query.brand = new RegExp(brand, "i")
   }
 
+  if (company) {
+    query.company = new RegExp(company, "i")
+  }
+
   if (category) {
     query.category = new RegExp(category, "i")
+  }
+
+  if (productType) {
+    query.productType = productType
+  }
+
+  if (priceCategory) {
+    query["pricing.priceCategory"] = priceCategory
+  }
+
+  // 价格范围筛选
+  if (priceMin || priceMax) {
+    query["pricing.retailPrice"] = {}
+    if (priceMin) query["pricing.retailPrice"].$gte = parseFloat(priceMin)
+    if (priceMax) query["pricing.retailPrice"].$lte = parseFloat(priceMax)
+  }
+
+  // 爆珠筛选
+  if (hasPop !== undefined) {
+    query["features.hasPop"] = hasPop === "true"
   }
 
   // 文本搜索
@@ -60,7 +90,10 @@ const getProducts = asyncHandler(async (req, res) => {
       { name: new RegExp(search, "i") },
       { brand: new RegExp(search, "i") },
       { keywords: { $in: [new RegExp(search, "i")] } },
-      { wholesaleName: new RegExp(search, "i") },
+      { "wholesale.name": new RegExp(search, "i") },
+      { productCode: new RegExp(search, "i") },
+      { boxCode: new RegExp(search, "i") },
+      { company: new RegExp(search, "i") },
     ]
   }
 
@@ -137,11 +170,15 @@ const createProduct = asyncHandler(async (req, res) => {
     throw new BusinessError("所选模板已被禁用")
   }
 
+  // 准备商品数据
   const productData = {
     ...req.body,
     templateId,
-    "metadata.lastUpdatedBy": req.user._id,
-    "metadata.source": "manual",
+    metadata: {
+      ...req.body.metadata,
+      lastUpdatedBy: req.user._id,
+      source: req.body.metadata?.source || "manual",
+    },
   }
 
   const product = new Product(productData)
@@ -154,6 +191,7 @@ const createProduct = asyncHandler(async (req, res) => {
   logOperation("创建商品", req.user, {
     productId: product._id,
     productName: product.name,
+    brand: product.brand,
   })
 
   logger.info("商品创建成功", {
@@ -174,27 +212,24 @@ const createProduct = asyncHandler(async (req, res) => {
  */
 const updateProduct = asyncHandler(async (req, res) => {
   const { id } = req.params
-  const updateData = {
-    ...req.body,
-    "metadata.lastUpdatedBy": req.user._id,
-    updatedAt: new Date(),
-  }
 
-  const product = await Product.findByIdAndUpdate(
-    id,
-    { $set: updateData },
-    { new: true, runValidators: true }
-  )
-
+  const product = await Product.findById(id)
   if (!product) {
     throw new NotFoundError("商品")
   }
+
+  // 更新商品数据
+  Object.assign(product, req.body)
+  product.metadata.lastUpdatedBy = req.user._id
+  product.updatedAt = new Date()
+
+  await product.save()
 
   // 记录操作日志
   logOperation("更新商品", req.user, {
     productId: product._id,
     productName: product.name,
-    changes: req.body,
+    changes: Object.keys(req.body),
   })
 
   logger.info("商品更新成功", {
@@ -217,15 +252,17 @@ const deleteProduct = asyncHandler(async (req, res) => {
   const { id } = req.params
 
   const product = await Product.findById(id)
-
   if (!product) {
     throw new NotFoundError("商品")
   }
 
-  // 软删除：设置为不活跃
-  product.isActive = false
-  product.metadata.lastUpdatedBy = req.user._id
-  await product.save()
+  await product.deleteOne()
+
+  // 更新模板统计
+  const template = await ProductTemplate.findById(product.templateId)
+  if (template) {
+    await template.updateStatistics()
+  }
 
   // 记录操作日志
   logOperation("删除商品", req.user, {
@@ -246,96 +283,58 @@ const deleteProduct = asyncHandler(async (req, res) => {
 })
 
 /**
- * 批量操作商品
+ * 批量删除商品
  */
-const batchOperation = asyncHandler(async (req, res) => {
-  const { ids, action, note } = req.body
+const bulkDeleteProducts = asyncHandler(async (req, res) => {
+  const { ids, templateId } = req.body
 
-  if (!Array.isArray(ids) || ids.length === 0) {
-    throw new BusinessError("商品ID列表不能为空")
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    throw new BusinessError("请提供要删除的商品ID列表")
   }
 
-  let updateData = {
-    "metadata.lastUpdatedBy": req.user._id,
-    updatedAt: new Date(),
+  if (!templateId) {
+    throw new BusinessError("必须指定模板ID")
   }
 
-  switch (action) {
-    case "activate":
-      updateData.isActive = true
-      break
-    case "deactivate":
-      updateData.isActive = false
-      break
-    case "delete":
-      updateData.isActive = false
-      break
-    default:
-      throw new BusinessError("不支持的操作类型")
-  }
-
-  const result = await Product.updateMany(
-    { _id: { $in: ids } },
-    { $set: updateData }
-  )
-
-  // 记录操作日志
-  logOperation(`批量${action}商品`, req.user, {
-    productIds: ids,
-    affectedCount: result.modifiedCount,
-    note,
+  // 验证所有商品都属于指定模板
+  const products = await Product.find({
+    _id: { $in: ids },
+    templateId: templateId,
   })
 
-  logger.info("批量操作完成", {
-    action,
+  if (products.length !== ids.length) {
+    throw new BusinessError("部分商品不存在或不属于指定模板")
+  }
+
+  // 执行批量删除
+  const result = await Product.deleteMany({
+    _id: { $in: ids },
+    templateId: templateId,
+  })
+
+  // 更新模板统计
+  const template = await ProductTemplate.findById(templateId)
+  if (template) {
+    await template.updateStatistics()
+  }
+
+  // 记录操作日志
+  logOperation("批量删除商品", req.user, {
+    templateId,
+    deletedCount: result.deletedCount,
     productIds: ids,
-    affectedCount: result.modifiedCount,
+  })
+
+  logger.info("批量删除商品成功", {
+    templateId,
+    deletedCount: result.deletedCount,
     userId: req.user._id,
   })
 
   res.json({
     success: true,
-    message: `批量${action}完成`,
-    data: {
-      affectedCount: result.modifiedCount,
-      requestedCount: ids.length,
-    },
-  })
-})
-
-/**
- * 搜索商品
- */
-const searchProducts = asyncHandler(async (req, res) => {
-  const {
-    q: query,
-    limit = 20,
-    brand,
-    category,
-    priceMin,
-    priceMax,
-  } = req.query
-
-  if (!query) {
-    throw new BusinessError("搜索关键词不能为空")
-  }
-
-  // 使用商品模型的静态搜索方法
-  const products = await Product.searchProducts(query, {
-    brand,
-    category,
-    priceMin: priceMin ? parseFloat(priceMin) : undefined,
-    priceMax: priceMax ? parseFloat(priceMax) : undefined,
-    limit: parseInt(limit),
-  })
-
-  res.json({
-    success: true,
-    data: {
-      products,
-      query,
-      count: products.length,
-    },
+    message: `成功删除 ${result.deletedCount} 个商品`,
+    data: { deletedCount: result.deletedCount },
   })
 })
 
@@ -343,86 +342,409 @@ const searchProducts = asyncHandler(async (req, res) => {
  * 获取商品统计信息
  */
 const getProductStats = asyncHandler(async (req, res) => {
-  const stats = await Product.aggregate([
-    {
-      $group: {
-        _id: null,
-        totalProducts: { $sum: 1 },
-        activeProducts: {
-          $sum: { $cond: [{ $eq: ["$isActive", true] }, 1, 0] },
+  const { templateId } = req.query
+
+  if (!templateId) {
+    throw new BusinessError("必须指定模板ID")
+  }
+
+  const [
+    totalCount,
+    activeCount,
+    brandStats,
+    priceDistribution,
+    companyStats,
+    productTypeStats,
+    recentProducts,
+  ] = await Promise.all([
+    Product.countDocuments({ templateId }),
+    Product.countDocuments({ templateId, isActive: true }),
+    Product.aggregate([
+      {
+        $match: {
+          templateId: mongoose.Types.ObjectId(templateId),
+          isActive: true,
         },
-        inactiveProducts: {
-          $sum: { $cond: [{ $eq: ["$isActive", false] }, 1, 0] },
-        },
-        avgPrice: {
-          $avg: "$specifications.price",
-        },
-        uniqueBrands: { $addToSet: "$brand" },
-        uniqueCategories: { $addToSet: "$category" },
       },
-    },
-    {
-      $project: {
-        _id: 0,
-        totalProducts: 1,
-        activeProducts: 1,
-        inactiveProducts: 1,
-        avgPrice: { $round: ["$avgPrice", 2] },
-        brandCount: { $size: "$uniqueBrands" },
-        categoryCount: { $size: "$uniqueCategories" },
+      { $group: { _id: "$brand", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 },
+    ]),
+    Product.aggregate([
+      {
+        $match: {
+          templateId: mongoose.Types.ObjectId(templateId),
+          isActive: true,
+        },
       },
-    },
+      {
+        $group: {
+          _id: "$pricing.priceCategory",
+          count: { $sum: 1 },
+          avgPrice: { $avg: "$pricing.retailPrice" },
+          minPrice: { $min: "$pricing.retailPrice" },
+          maxPrice: { $max: "$pricing.retailPrice" },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]),
+    Product.aggregate([
+      {
+        $match: {
+          templateId: mongoose.Types.ObjectId(templateId),
+          isActive: true,
+        },
+      },
+      { $group: { _id: "$company", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 10 },
+    ]),
+    Product.aggregate([
+      {
+        $match: {
+          templateId: mongoose.Types.ObjectId(templateId),
+          isActive: true,
+        },
+      },
+      { $group: { _id: "$productType", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]),
+    Product.find({ templateId, isActive: true })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select("name brand pricing.retailPrice createdAt")
+      .lean(),
   ])
 
-  // 获取品牌分布
-  const brandStats = await Product.aggregate([
-    { $match: { isActive: true } },
-    {
-      $group: {
-        _id: "$brand",
-        count: { $sum: 1 },
-        avgPrice: { $avg: "$specifications.price" },
-      },
+  const stats = {
+    overview: {
+      total: totalCount,
+      active: activeCount,
+      inactive: totalCount - activeCount,
     },
-    { $sort: { count: -1 } },
-    { $limit: 10 },
-  ])
+    brandStats,
+    priceDistribution,
+    companyStats,
+    productTypeStats,
+    recentProducts,
+  }
 
-  // 获取分类分布
-  const categoryStats = await Product.aggregate([
-    { $match: { isActive: true, category: { $ne: null, $ne: "" } } },
-    {
-      $group: {
-        _id: "$category",
-        count: { $sum: 1 },
-      },
-    },
-    { $sort: { count: -1 } },
-    { $limit: 10 },
-  ])
+  res.json({
+    success: true,
+    data: { stats },
+  })
+})
+
+/**
+ * 搜索商品
+ */
+const searchProducts = asyncHandler(async (req, res) => {
+  const { q: query, templateId, limit = 20, page = 1, filters = {} } = req.query
+
+  if (!templateId) {
+    throw new BusinessError("必须指定模板ID")
+  }
+
+  const searchOptions = {
+    ...filters,
+    limit: parseInt(limit),
+    page: parseInt(page),
+  }
+
+  const results = await Product.searchProducts(query, searchOptions)
 
   res.json({
     success: true,
     data: {
-      overview: stats[0] || {
-        totalProducts: 0,
-        activeProducts: 0,
-        inactiveProducts: 0,
-        avgPrice: 0,
-        brandCount: 0,
-        categoryCount: 0,
+      products: results,
+      query,
+      pagination: {
+        current: parseInt(page),
+        limit: parseInt(limit),
       },
-      brandDistribution: brandStats,
-      categoryDistribution: categoryStats,
     },
   })
 })
 
 /**
+ * 导入商品数据
+ */
+const importProducts = asyncHandler(async (req, res) => {
+  const { templateId, importType = "csv" } = req.body
+
+  if (!req.file) {
+    throw new BusinessError("请上传文件")
+  }
+
+  if (!templateId) {
+    throw new BusinessError("必须指定商品模板")
+  }
+
+  const template = await ProductTemplate.findById(templateId)
+  if (!template) {
+    throw new NotFoundError("商品模板")
+  }
+
+  const filePath = req.file.path
+  const results = {
+    total: 0,
+    success: 0,
+    failed: 0,
+    errors: [],
+  }
+
+  try {
+    if (importType === "csv") {
+      await importFromCSV(filePath, templateId, results, req.user)
+    } else if (importType === "excel") {
+      await importFromExcel(filePath, templateId, results, req.user)
+    } else {
+      throw new BusinessError("不支持的文件格式")
+    }
+
+    // 更新模板统计
+    await template.updateStatistics()
+
+    // 记录操作日志
+    logOperation("导入商品", req.user, {
+      templateId,
+      filename: req.file.originalname,
+      results,
+    })
+
+    logger.info("商品导入完成", {
+      templateId,
+      results,
+      userId: req.user._id,
+    })
+
+    res.json({
+      success: true,
+      message: `导入完成：成功 ${results.success} 个，失败 ${results.failed} 个`,
+      data: { results },
+    })
+  } catch (error) {
+    logger.error("商品导入失败", { error: error.message, userId: req.user._id })
+
+    // 返回错误响应而不是抛出错误
+    res.status(400).json({
+      success: false,
+      message: `导入失败: ${error.message}`,
+      data: { results, error: error.message },
+    })
+    return
+  } finally {
+    // 清理上传的文件
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath)
+    }
+  }
+})
+
+/**
+ * 从Excel导入商品
+ */
+async function importFromExcel(filePath, templateId, results, user) {
+  const XLSX = require("xlsx")
+
+  try {
+    // 读取Excel文件
+    const workbook = XLSX.readFile(filePath)
+    const sheetName = workbook.SheetNames[0] // 使用第一个工作表
+    const worksheet = workbook.Sheets[sheetName]
+
+    // 将工作表转换为JSON格式
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 })
+
+    if (jsonData.length === 0) {
+      throw new Error("Excel文件为空")
+    }
+
+    // 第一行作为表头
+    const headers = jsonData[0]
+    const products = []
+
+    // 处理数据行（从第二行开始）
+    for (let i = 1; i < jsonData.length; i++) {
+      const row = jsonData[i]
+      if (!row || row.length === 0) continue
+
+      try {
+        // 将数组转换为对象
+        const rowObject = {}
+        headers.forEach((header, index) => {
+          if (header && row[index] !== undefined) {
+            rowObject[header] = row[index]
+          }
+        })
+
+        const product = parseCSVRow(rowObject, templateId, user)
+        if (product) {
+          products.push(product)
+        }
+        results.total++
+      } catch (error) {
+        results.failed++
+        results.errors.push(`第${i + 1}行: ${error.message}`)
+      }
+    }
+
+    // 批量插入商品
+    if (products.length > 0) {
+      try {
+        await Product.insertMany(products, { ordered: false })
+        results.success = products.length
+      } catch (error) {
+        if (error.name === "BulkWriteError") {
+          results.success = products.length - error.writeErrors.length
+          results.failed += error.writeErrors.length
+          error.writeErrors.forEach((err) => {
+            results.errors.push(`导入错误: ${err.errmsg}`)
+          })
+        } else {
+          throw error
+        }
+      }
+    }
+  } catch (error) {
+    throw new Error(`Excel文件解析失败: ${error.message}`)
+  }
+}
+
+/**
+ * 从CSV导入商品
+ */
+async function importFromCSV(filePath, templateId, results, user) {
+  return new Promise((resolve, reject) => {
+    const products = []
+
+    fs.createReadStream(filePath)
+      .pipe(csv())
+      .on("data", (row) => {
+        try {
+          const product = parseCSVRow(row, templateId, user)
+          if (product) {
+            products.push(product)
+          }
+          results.total++
+        } catch (error) {
+          results.failed++
+          results.errors.push(`第${results.total + 1}行: ${error.message}`)
+        }
+      })
+      .on("end", async () => {
+        try {
+          if (products.length > 0) {
+            await Product.insertMany(products, { ordered: false })
+            results.success = products.length
+          }
+          resolve()
+        } catch (error) {
+          if (error.name === "BulkWriteError") {
+            results.success = products.length - error.writeErrors.length
+            results.failed += error.writeErrors.length
+            error.writeErrors.forEach((err) => {
+              results.errors.push(`导入错误: ${err.errmsg}`)
+            })
+            resolve()
+          } else {
+            reject(error)
+          }
+        }
+      })
+      .on("error", reject)
+  })
+}
+
+/**
+ * 解析CSV行数据
+ */
+function parseCSVRow(row, templateId, user) {
+  // 基本验证
+  if (!row["商品名称"] || !row["品牌"]) {
+    throw new Error("商品名称和品牌不能为空")
+  }
+
+  return {
+    templateId,
+    name: row["商品名称"]?.trim(),
+    brand: row["品牌"]?.trim(),
+    productCode: row["产品编码"]?.trim(),
+    boxCode: row["盒码编码"]?.trim(),
+    productType: row["产品类型"]?.trim(),
+    packageType: row["包装类型"]?.trim(),
+
+    specifications: {
+      circumference: parseFloat(row["烟支周长(mm)"]) || undefined,
+      length: row["烟支长度"]?.trim(),
+      packageQuantity: parseFloat(row["包装数量"]) || undefined,
+    },
+
+    launchDate: parseDate(row["上市时间"]),
+
+    chemicalContent: {
+      tarContent: parseFloat(row["焦油含量(mg)"]) || undefined,
+      nicotineContent: parseFloat(row["烟气烟碱量(mg)"]) || undefined,
+      carbonMonoxideContent: parseFloat(row["烟气一氧化碳量(mg)"]) || undefined,
+    },
+
+    appearance: {
+      color: row["颜色"]?.trim(),
+    },
+
+    company: row["所属企业"]?.trim(),
+
+    features: {
+      hasPop: parseBooleanFromChinese(row["是否爆珠"]),
+    },
+
+    pricing: {
+      priceCategory: row["价格类型"]?.trim(),
+      companyPrice: parseFloat(row["公司价"]) || undefined, // 新增公司价字段
+      retailPrice: parseFloat(row["零售价"]) || undefined,
+      unit: row["单位"]?.trim() || "元/条",
+    },
+
+    metadata: {
+      source: "import",
+      importBatch: new Date().toISOString().split("T")[0],
+      lastUpdatedBy: user._id,
+    },
+  }
+}
+
+/**
+ * 解析日期
+ */
+function parseDate(dateStr) {
+  if (!dateStr) return undefined
+  const date = new Date(dateStr)
+  return isNaN(date.getTime()) ? undefined : date
+}
+
+/**
+ * 解析中文布尔值
+ */
+function parseBooleanFromChinese(value) {
+  if (!value) return false
+  const str = value.toString().trim()
+  return str === "是" || str === "true" || str === "1"
+}
+
+/**
  * 获取品牌列表
  */
 const getBrands = asyncHandler(async (req, res) => {
-  const brands = await Product.distinct("brand", { isActive: true })
+  const { templateId } = req.query
+
+  if (!templateId) {
+    throw new BusinessError("必须指定模板ID")
+  }
+
+  const brands = await Product.distinct("brand", {
+    templateId: mongoose.Types.ObjectId(templateId),
+    isActive: true,
+  })
 
   res.json({
     success: true,
@@ -434,9 +756,15 @@ const getBrands = asyncHandler(async (req, res) => {
  * 获取分类列表
  */
 const getCategories = asyncHandler(async (req, res) => {
+  const { templateId } = req.query
+
+  if (!templateId) {
+    throw new BusinessError("必须指定模板ID")
+  }
+
   const categories = await Product.distinct("category", {
+    templateId: mongoose.Types.ObjectId(templateId),
     isActive: true,
-    category: { $ne: null, $ne: "" },
   })
 
   res.json({
@@ -446,39 +774,66 @@ const getCategories = asyncHandler(async (req, res) => {
 })
 
 /**
- * 获取所有商品ID列表（用于全选功能）
+ * 获取所有商品ID列表
  */
 const getAllProductIds = asyncHandler(async (req, res) => {
   const {
+    templateId,
     search = "",
     brand = "",
+    company = "",
+    productType = "",
+    priceCategory = "",
+    priceMin,
+    priceMax,
+    hasPop,
     category = "",
     isActive,
-    templateId,
   } = req.query
 
-  // 构建查询条件（复用现有逻辑）
-  const query = {}
-
-  // 模板ID过滤 - 必须指定模板
   if (!templateId) {
-    throw new BusinessError("必须指定商品模板")
+    throw new BusinessError("必须指定模板ID")
   }
-  query.templateId = templateId
 
-  // 默认仅返回启用商品；只有当显式传入 isActive 时才按传值过滤
-  if (isActive === undefined) {
-    query.isActive = true
-  } else {
+  // 构建查询条件 - 与getProducts保持完全一致
+  const query = { templateId }
+
+  // 状态过滤 - 默认显示所有商品
+  if (isActive !== undefined && isActive !== "all") {
     query.isActive = isActive === "true"
   }
 
+  // 基本筛选
   if (brand) {
     query.brand = new RegExp(brand, "i")
   }
 
+  if (company) {
+    query.company = new RegExp(company, "i")
+  }
+
   if (category) {
     query.category = new RegExp(category, "i")
+  }
+
+  if (productType) {
+    query.productType = productType
+  }
+
+  if (priceCategory) {
+    query["pricing.priceCategory"] = priceCategory
+  }
+
+  // 价格范围筛选
+  if (priceMin || priceMax) {
+    query["pricing.retailPrice"] = {}
+    if (priceMin) query["pricing.retailPrice"].$gte = parseFloat(priceMin)
+    if (priceMax) query["pricing.retailPrice"].$lte = parseFloat(priceMax)
+  }
+
+  // 爆珠筛选
+  if (hasPop !== undefined) {
+    query["features.hasPop"] = hasPop === "true"
   }
 
   // 文本搜索
@@ -487,602 +842,104 @@ const getAllProductIds = asyncHandler(async (req, res) => {
       { name: new RegExp(search, "i") },
       { brand: new RegExp(search, "i") },
       { keywords: { $in: [new RegExp(search, "i")] } },
-      { wholesaleName: new RegExp(search, "i") },
+      { "wholesale.name": new RegExp(search, "i") },
+      { productCode: new RegExp(search, "i") },
+      { boxCode: new RegExp(search, "i") },
+      { company: new RegExp(search, "i") },
     ]
   }
 
-  // 只返回ID列表
-  const productIds = await Product.find(query).select("_id").lean()
-  const ids = productIds.map((product) => product._id.toString())
+  const ids = await Product.find(query).select("_id").lean()
 
   res.json({
     success: true,
-    data: {
-      ids,
-      total: ids.length,
-    },
+    data: { ids: ids.map((item) => item._id) },
   })
 })
 
 /**
- * 导入商品（批量创建）
- */
-const importProducts = asyncHandler(async (req, res) => {
-  const { products } = req.body
-
-  if (!Array.isArray(products) || products.length === 0) {
-    throw new BusinessError("商品数据不能为空")
-  }
-
-  const results = {
-    success: [],
-    failed: [],
-    duplicates: [],
-  }
-
-  for (const productData of products) {
-    try {
-      // 检查是否重复（根据名称和品牌）
-      const existingProduct = await Product.findOne({
-        name: productData.name,
-        brand: productData.brand,
-      })
-
-      if (existingProduct) {
-        results.duplicates.push({
-          data: productData,
-          reason: "商品已存在",
-        })
-        continue
-      }
-
-      // 创建商品
-      const product = new Product({
-        ...productData,
-        "metadata.source": "import",
-        "metadata.importBatch": req.body.batchId || new Date().toISOString(),
-        "metadata.lastUpdatedBy": req.user._id,
-      })
-
-      await product.save()
-      results.success.push(product)
-    } catch (error) {
-      results.failed.push({
-        data: productData,
-        error: error.message,
-      })
-    }
-  }
-
-  // 记录操作日志
-  logOperation("批量导入商品", req.user, {
-    totalCount: products.length,
-    successCount: results.success.length,
-    failedCount: results.failed.length,
-    duplicateCount: results.duplicates.length,
-  })
-
-  logger.info("商品批量导入完成", {
-    totalCount: products.length,
-    successCount: results.success.length,
-    failedCount: results.failed.length,
-    userId: req.user._id,
-  })
-
-  res.json({
-    success: true,
-    message: "商品导入完成",
-    data: {
-      summary: {
-        total: products.length,
-        success: results.success.length,
-        failed: results.failed.length,
-        duplicates: results.duplicates.length,
-      },
-      results,
-    },
-  })
-})
-
-/**
- * 导出商品
+ * 导出商品数据
  */
 const exportProducts = asyncHandler(async (req, res) => {
-  const { format = "json", ...filters } = req.query
+  const { format = "json", templateId, brand, category, isActive } = req.query
 
-  // 构建查询条件
-  const query = {}
-  if (filters.brand) query.brand = new RegExp(filters.brand, "i")
-  if (filters.category) query.category = new RegExp(filters.category, "i")
-  if (filters.isActive !== undefined)
-    query.isActive = filters.isActive === "true"
+  if (!templateId) {
+    throw new BusinessError("必须指定模板ID")
+  }
 
-  const products = await Product.find(query).sort({ updatedAt: -1 }).lean()
+  const query = { templateId }
+  if (brand) query.brand = new RegExp(brand, "i")
+  if (category) query.category = new RegExp(category, "i")
+  if (isActive !== undefined) query.isActive = isActive === "true"
 
-  // 记录操作日志
-  logOperation("导出商品", req.user, {
-    count: products.length,
-    format,
-    filters,
-  })
-
-  logger.info("商品导出", {
-    count: products.length,
-    format,
-    userId: req.user._id,
-  })
+  const products = await Product.find(query).lean()
 
   if (format === "csv") {
-    // 设置CSV响应头
     res.setHeader("Content-Type", "text/csv")
     res.setHeader("Content-Disposition", "attachment; filename=products.csv")
 
-    // 这里应该转换为CSV格式，简化处理
-    const csvData = products
-      .map(
-        (p) =>
-          `"${p.name}","${p.brand}","${p.category || ""}","${
-            p.specifications?.price || ""
-          }"`
-      )
-      .join("\n")
+    // 简单的CSV导出实现
+    const headers = [
+      "商品名称",
+      "品牌",
+      "产品编码",
+      "盒码编码",
+      "零售价",
+      "企业",
+    ]
+    const csvData = [
+      headers.join(","),
+      ...products.map((product) =>
+        [
+          product.name,
+          product.brand,
+          product.productCode || "",
+          product.boxCode || "",
+          product.pricing?.retailPrice || "",
+          product.company || "",
+        ].join(",")
+      ),
+    ].join("\n")
 
-    res.send("名称,品牌,分类,价格\n" + csvData)
+    res.send(csvData)
   } else {
     res.json({
       success: true,
       data: { products },
-      meta: {
-        count: products.length,
-        exportTime: new Date().toISOString(),
-      },
     })
   }
 })
 
 /**
- * 上传并导入商品文件
+ * 上传商品文件
  */
 const uploadProducts = asyncHandler(async (req, res) => {
-  if (!req.file) {
-    throw new BusinessError("请选择要上传的文件")
-  }
-
-  // 获取templateId参数
-  const { templateId } = req.query
-  if (!templateId) {
-    throw new BusinessError("必须指定商品模板ID")
-  }
-
-  const file = req.file
-  const fileExtension = path.extname(file.originalname).toLowerCase()
-
-  let products = []
-
-  try {
-    if (fileExtension === ".xlsx" || fileExtension === ".xls") {
-      // 解析Excel文件
-      products = await parseExcelFile(file.path)
-    } else if (fileExtension === ".csv") {
-      // 解析CSV文件
-      products = await parseCSVFile(file.path)
-    } else {
-      throw new BusinessError(
-        "不支持的文件格式，请上传 .xlsx, .xls 或 .csv 文件"
-      )
-    }
-
-    // 删除临时文件
-    fs.unlinkSync(file.path)
-
-    console.log("解析得到的商品数据:", products)
-
-    if (products.length === 0) {
-      throw new BusinessError("文件中没有有效的商品数据")
-    }
-
-    // 验证数据格式
-    const validProducts = []
-    const invalidProducts = []
-
-    for (const [index, product] of products.entries()) {
-      console.log(`验证第${index + 1}行数据:`, product)
-      const validation = validateProductData(product, index + 2) // +2 因为第一行是标题
-      console.log(`验证结果:`, validation)
-      if (validation.isValid) {
-        validProducts.push(validation.product)
-      } else {
-        invalidProducts.push({
-          row: index + 2,
-          data: product,
-          errors: validation.errors,
-        })
-      }
-    }
-
-    if (validProducts.length === 0) {
-      console.log("所有商品数据验证失败:", invalidProducts)
-      return res.status(400).json({
-        success: false,
-        message: "文件中没有有效的商品数据",
-        data: {
-          invalidProducts,
-          summary: {
-            total: products.length,
-            valid: 0,
-            invalid: invalidProducts.length,
-          },
-          errors: invalidProducts.map((p) => p.errors).flat(),
-        },
-      })
-    }
-
-    // 使用现有的导入逻辑
-    console.log("开始导入有效商品，数量:", validProducts.length)
-    const results = await processProductImport(
-      validProducts,
-      req.user,
-      templateId
-    )
-    console.log("导入结果:", results)
-
-    res.json({
-      success: true,
-      message: "文件上传并导入完成",
-      data: {
-        summary: {
-          total: products.length,
-          valid: validProducts.length,
-          invalid: invalidProducts.length,
-          successCount: results.success.length,
-          failedCount: results.failed.length,
-          duplicateCount: results.duplicates.length,
-        },
-        results,
-        invalidProducts:
-          invalidProducts.length > 0 ? invalidProducts : undefined,
-      },
-    })
-  } catch (error) {
-    // 确保删除临时文件
-    if (fs.existsSync(file.path)) {
-      fs.unlinkSync(file.path)
-    }
-    throw error
-  }
+  // 重用现有的importProducts逻辑
+  await importProducts(req, res)
 })
 
 /**
- * 解析Excel文件
- */
-const parseExcelFile = async (filePath) => {
-  const workbook = xlsx.readFile(filePath)
-  const sheetName = workbook.SheetNames[0]
-  const worksheet = workbook.Sheets[sheetName]
-
-  // 转换为JSON，第一行作为标题
-  const jsonData = xlsx.utils.sheet_to_json(worksheet)
-
-  return jsonData.map((row) => normalizeProductData(row))
-}
-
-/**
- * 解析CSV文件
- */
-const parseCSVFile = (filePath) => {
-  return new Promise((resolve, reject) => {
-    const results = []
-
-    fs.createReadStream(filePath, { encoding: "utf8" })
-      .pipe(csv())
-      .on("data", (row) => {
-        results.push(normalizeProductData(row))
-      })
-      .on("end", () => {
-        resolve(results)
-      })
-      .on("error", (error) => {
-        reject(new BusinessError(`CSV文件解析失败: ${error.message}`))
-      })
-  })
-}
-
-/**
- * 标准化商品数据
- */
-const normalizeProductData = (row) => {
-  // 支持中英文字段名 - 根据实际数据格式调整
-  const fieldMapping = {
-    // 商品名称相关
-    商品名: "name",
-    商品名称: "name",
-    名称: "name",
-    name: "name",
-
-    // 品牌相关
-    品牌: "brand",
-    brand: "brand",
-
-    // 分类相关
-    分类: "category",
-    类别: "category",
-    category: "category",
-
-    // 价格相关
-    价格: "price",
-    零售价: "price",
-    公司价: "companyPrice", // 公司价单独映射
-    price: "price",
-    companyPrice: "companyPrice",
-
-    // 批发价相关
-    批发价: "wholesalePrice",
-    wholesale_price: "wholesalePrice",
-    wholesalePrice: "wholesalePrice",
-
-    // 库存相关
-    库存: "stock",
-    stock: "stock",
-
-    // 条码相关
-    条码: "barcode",
-    盒码: "boxCode", // 盒码和条码分开映射
-    barcode: "barcode",
-    boxCode: "boxCode",
-
-    // 描述相关
-    描述: "description",
-    description: "description",
-
-    // 关键词相关
-    关键词: "keywords",
-    keywords: "keywords",
-
-    // 规格包装相关
-    规格: "specifications",
-    specifications: "specifications",
-    包装: "packageType",
-    package_type: "packageType",
-    packageType: "packageType",
-
-    // 单位相关
-    单位: "unit",
-    unit: "unit",
-  }
-
-  const normalized = {}
-
-  for (const [key, value] of Object.entries(row)) {
-    const normalizedKey = fieldMapping[key] || key
-    if (value !== undefined && value !== null && value !== "") {
-      // 直接映射所有字段，不再跳过条码字段
-      normalized[normalizedKey] = value
-    }
-  }
-
-  return normalized
-}
-
-/**
- * 验证商品数据
- */
-const validateProductData = (product, row) => {
-  const errors = []
-  const result = {
-    name: "",
-    brand: "",
-    category: "",
-    keywords: [],
-    boxCode: "",
-    barcode: "",
-    companyPrice: null,
-    specifications: {
-      price: null,
-      packageType: "",
-      size: "",
-      unit: "盒",
-    },
-    wholesaleName: "",
-    wholesalePrice: null,
-    tags: [],
-  }
-
-  // 必填字段验证
-  if (
-    !product.name ||
-    typeof product.name !== "string" ||
-    product.name.trim().length === 0
-  ) {
-    errors.push(`第${row}行：商品名称不能为空`)
-  } else {
-    result.name = product.name.trim()
-  }
-
-  // 品牌字段处理 - 支持数字转字符串
-  if (
-    !product.brand ||
-    (typeof product.brand !== "string" && typeof product.brand !== "number")
-  ) {
-    errors.push(`第${row}行：品牌不能为空`)
-  } else {
-    const brandStr = product.brand.toString().trim()
-    if (brandStr.length === 0) {
-      errors.push(`第${row}行：品牌不能为空`)
-    } else {
-      result.brand = brandStr
-    }
-  }
-
-  // 可选字段处理
-  if (product.category) {
-    result.category = product.category.toString().trim()
-  }
-
-  // 条码和盒码处理
-  if (product.boxCode) {
-    result.boxCode = product.boxCode.toString().trim()
-  }
-
-  if (product.barcode) {
-    result.barcode = product.barcode.toString().trim()
-  }
-
-  // 公司价处理
-  if (product.companyPrice) {
-    const companyPrice = parseFloat(product.companyPrice)
-    if (isNaN(companyPrice) || companyPrice < 0) {
-      errors.push(`第${row}行：公司价格式不正确`)
-    } else {
-      result.companyPrice = companyPrice
-    }
-  }
-
-  if (product.price) {
-    const price = parseFloat(product.price)
-    if (isNaN(price) || price < 0) {
-      errors.push(`第${row}行：价格格式不正确`)
-    } else {
-      result.specifications.price = price
-    }
-  }
-
-  if (product.wholesalePrice) {
-    const wholesalePrice = parseFloat(product.wholesalePrice)
-    if (isNaN(wholesalePrice) || wholesalePrice < 0) {
-      errors.push(`第${row}行：批发价格式不正确`)
-    } else {
-      result.wholesalePrice = wholesalePrice
-    }
-  }
-
-  if (product.keywords) {
-    if (typeof product.keywords === "string") {
-      result.keywords = product.keywords
-        .split(",")
-        .map((k) => k.trim())
-        .filter((k) => k.length > 0)
-    } else if (Array.isArray(product.keywords)) {
-      result.keywords = product.keywords
-        .map((k) => k.toString().trim())
-        .filter((k) => k.length > 0)
-    }
-  }
-
-  if (product.packageType) {
-    result.specifications.packageType = product.packageType.toString().trim()
-  }
-
-  if (product.unit) {
-    result.specifications.unit = product.unit.toString().trim()
-  }
-
-  if (product.description) {
-    result.description = product.description.toString().trim()
-  }
-
-  return {
-    isValid: errors.length === 0,
-    product: result,
-    errors,
-  }
-}
-
-/**
- * 处理商品导入逻辑（复用现有的importProducts逻辑）
- */
-const processProductImport = async (products, user, templateId) => {
-  const results = {
-    success: [],
-    failed: [],
-    duplicates: [],
-  }
-
-  for (const productData of products) {
-    try {
-      console.log("正在处理商品数据:", productData)
-
-      // 检查是否重复（根据名称和品牌）
-      const existingProduct = await Product.findOne({
-        name: productData.name,
-        brand: productData.brand,
-      })
-
-      if (existingProduct) {
-        console.log("发现重复商品:", productData.name, productData.brand)
-        results.duplicates.push({
-          data: productData,
-          reason: "商品已存在",
-        })
-        continue
-      }
-
-      // 创建商品
-      const product = new Product({
-        ...productData,
-        templateId, // 设置模板ID
-        metadata: {
-          source: "import", // 使用有效的enum值
-          importBatch: new Date().toISOString(),
-          lastUpdatedBy: user._id,
-        },
-      })
-
-      console.log("准备保存商品:", product)
-      await product.save()
-      console.log("商品保存成功, ID:", product._id)
-      results.success.push(product)
-    } catch (error) {
-      console.error("保存商品失败:", error.message)
-      results.failed.push({
-        data: productData,
-        error: error.message,
-      })
-    }
-  }
-
-  // 记录操作日志
-  logOperation("文件上传导入商品", user, {
-    totalCount: products.length,
-    successCount: results.success.length,
-    failedCount: results.failed.length,
-    duplicateCount: results.duplicates.length,
-  })
-
-  logger.info("商品文件上传导入完成", {
-    totalCount: products.length,
-    successCount: results.success.length,
-    failedCount: results.failed.length,
-    userId: user._id,
-  })
-
-  return results
-}
-
-/**
- * 物理删除商品（完全从数据库中删除）
+ * 硬删除商品
  */
 const hardDeleteProduct = asyncHandler(async (req, res) => {
   const { id } = req.params
 
   const product = await Product.findById(id)
-
   if (!product) {
     throw new NotFoundError("商品")
   }
 
-  // 物理删除：从数据库中完全删除
   await Product.findByIdAndDelete(id)
 
-  // 记录操作日志
-  logOperation("物理删除商品", req.user, {
-    productId: id,
-    productName: product.name,
-  })
+  // 更新模板统计
+  const template = await ProductTemplate.findById(product.templateId)
+  if (template) {
+    await template.updateStatistics()
+  }
 
-  logger.info("商品物理删除成功", {
+  logOperation("硬删除商品", req.user, {
     productId: id,
     productName: product.name,
-    userId: req.user._id,
   })
 
   res.json({
@@ -1092,37 +949,137 @@ const hardDeleteProduct = asyncHandler(async (req, res) => {
 })
 
 /**
- * 批量物理删除商品
+ * 批量硬删除商品
  */
 const hardDeleteProducts = asyncHandler(async (req, res) => {
-  const { ids } = req.body
+  const { ids, templateId } = req.body
 
-  if (!Array.isArray(ids) || ids.length === 0) {
-    throw new BusinessError("商品ID列表不能为空")
+  if (!ids || !Array.isArray(ids) || ids.length === 0) {
+    throw new BusinessError("请提供要删除的商品ID列表")
   }
 
-  // 物理删除：从数据库中完全删除
-  const result = await Product.deleteMany({ _id: { $in: ids } })
-
-  // 记录操作日志
-  logOperation("批量物理删除商品", req.user, {
-    productIds: ids,
-    deletedCount: result.deletedCount,
+  const result = await Product.deleteMany({
+    _id: { $in: ids },
+    templateId: templateId,
   })
 
-  logger.info("批量物理删除完成", {
-    productIds: ids,
+  if (templateId) {
+    const template = await ProductTemplate.findById(templateId)
+    if (template) {
+      await template.updateStatistics()
+    }
+  }
+
+  logOperation("批量硬删除商品", req.user, {
+    templateId,
     deletedCount: result.deletedCount,
-    userId: req.user._id,
   })
 
   res.json({
     success: true,
-    message: `已永久删除 ${result.deletedCount} 个商品`,
+    message: `成功删除 ${result.deletedCount} 个商品`,
+    data: { deletedCount: result.deletedCount },
+  })
+})
+
+/**
+ * 更新商品状态
+ */
+const updateProductStatus = asyncHandler(async (req, res) => {
+  const { id } = req.params
+  const { isActive } = req.body
+
+  if (typeof isActive !== "boolean") {
+    throw new BusinessError("状态值必须是布尔类型")
+  }
+
+  const product = await Product.findById(id)
+  if (!product) {
+    throw new NotFoundError("商品不存在")
+  }
+
+  product.isActive = isActive
+  await product.save()
+
+  // 更新模板统计
+  if (product.templateId) {
+    const template = await ProductTemplate.findById(product.templateId)
+    if (template) {
+      await template.updateStatistics()
+    }
+  }
+
+  logOperation("更新商品状态", req.user, {
+    productId: id,
+    isActive,
+    productName: product.basicInfo?.name || "未知商品",
+  })
+
+  res.json({
+    success: true,
+    message: `商品已${isActive ? "启用" : "禁用"}`,
     data: {
-      deletedCount: result.deletedCount,
-      requestedCount: ids.length,
+      productId: id,
+      isActive,
+      product: product,
     },
+  })
+})
+
+/**
+ * 批量操作
+ */
+const batchOperation = asyncHandler(async (req, res) => {
+  const { operation, productIds, templateId, data } = req.body
+
+  if (!productIds || !Array.isArray(productIds) || productIds.length === 0) {
+    throw new BusinessError("请提供商品ID列表")
+  }
+
+  let result
+
+  switch (operation) {
+    case "delete":
+      result = await Product.updateMany(
+        { _id: { $in: productIds }, templateId },
+        { isActive: false }
+      )
+      break
+    case "activate":
+      result = await Product.updateMany(
+        { _id: { $in: productIds }, templateId },
+        { isActive: true }
+      )
+      break
+    case "deactivate":
+      result = await Product.updateMany(
+        { _id: { $in: productIds }, templateId },
+        { isActive: false }
+      )
+      break
+    case "updateCategory":
+      if (!data?.category) {
+        throw new BusinessError("请提供分类信息")
+      }
+      result = await Product.updateMany(
+        { _id: { $in: productIds }, templateId },
+        { category: data.category }
+      )
+      break
+    default:
+      throw new BusinessError("不支持的批量操作")
+  }
+
+  logOperation(`批量操作-${operation}`, req.user, {
+    templateId,
+    affectedCount: result.modifiedCount,
+    productIds,
+  })
+
+  res.json({
+    success: true,
+    message: `批量操作完成，影响 ${result.modifiedCount} 个商品`,
+    data: { affectedCount: result.modifiedCount },
   })
 })
 
@@ -1131,12 +1088,14 @@ module.exports = {
   getProductById,
   createProduct,
   updateProduct,
+  updateProductStatus,
   deleteProduct,
   hardDeleteProduct,
   hardDeleteProducts,
+  bulkDeleteProducts,
   batchOperation,
-  searchProducts,
   getProductStats,
+  searchProducts,
   getBrands,
   getCategories,
   getAllProductIds,

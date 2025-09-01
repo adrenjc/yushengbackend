@@ -8,13 +8,12 @@ const config = require("../config/env")
 
 class SmartMatchingEngine {
   constructor(options = {}) {
-    // 匹配权重配置
+    // 匹配权重配置 - 移除价格权重
     this.weights = {
       name: options.nameWeight || config.MATCHING.weights.name,
       brand: options.brandWeight || config.MATCHING.weights.brand,
       keywords: options.keywordsWeight || config.MATCHING.weights.keywords,
       package: options.packageWeight || config.MATCHING.weights.package,
-      price: options.priceWeight || config.MATCHING.weights.price,
     }
 
     // 阈值配置
@@ -241,26 +240,18 @@ class SmartMatchingEngine {
       product.specifications?.packageType
     )
 
-    // 价格合理性
-    const priceScore = this.calculatePriceSimilarity(
-      wholesale.price,
-      product.specifications?.price
-    )
-
-    // 计算总分
+    // 计算总分 - 移除价格权重
     const total =
       nameScore * this.weights.name +
       brandScore * this.weights.brand +
       keywordScore * this.weights.keywords +
-      packageScore * this.weights.package +
-      priceScore * this.weights.price
+      packageScore * this.weights.package
 
     return {
       name: Math.round(nameScore * 100) / 100,
       brand: Math.round(brandScore * 100) / 100,
       keywords: Math.round(keywordScore * 100) / 100,
       package: Math.round(packageScore * 100) / 100,
-      price: Math.round(priceScore * 100) / 100,
       total: Math.round(total * 100) / 100,
     }
   }
@@ -355,25 +346,6 @@ class SmartMatchingEngine {
     }
 
     return 30
-  }
-
-  /**
-   * 计算价格相似度
-   */
-  calculatePriceSimilarity(wholesalePrice, productPrice) {
-    if (!wholesalePrice || !productPrice) return 50 // 默认中性分数
-
-    const priceDiff = Math.abs(wholesalePrice - productPrice)
-    const avgPrice = (wholesalePrice + productPrice) / 2
-    const diffPercentage = (priceDiff / avgPrice) * 100
-
-    // 价格差异越小，分数越高
-    if (diffPercentage <= 5) return 100
-    if (diffPercentage <= 10) return 85
-    if (diffPercentage <= 20) return 70
-    if (diffPercentage <= 30) return 50
-
-    return 20
   }
 
   /**
@@ -645,5 +617,3 @@ class SmartMatchingEngine {
 }
 
 module.exports = SmartMatchingEngine
-
-

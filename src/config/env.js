@@ -63,13 +63,12 @@ const config = {
     defaultThreshold: parseInt(process.env.DEFAULT_MATCH_THRESHOLD) || 65,
     autoConfirmThreshold: parseInt(process.env.AUTO_CONFIRM_THRESHOLD) || 90,
     learningRate: parseFloat(process.env.LEARNING_RATE) || 0.1,
-    // 匹配权重配置
+    // 匹配权重配置 - 移除价格权重，只关注名字相似度
     weights: {
-      name: 0.35,
-      brand: 0.25,
-      keywords: 0.2,
-      package: 0.1,
-      price: 0.1,
+      name: 0.5, // 提高名字权重到50%
+      brand: 0.3, // 品牌权重30%
+      keywords: 0.15, // 关键词权重15%
+      package: 0.05, // 包装权重5%
     },
   },
 
