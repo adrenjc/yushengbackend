@@ -172,6 +172,28 @@ const ProductSchema = new mongoose.Schema(
         min: [0, "批发价格不能为负数"],
         comment: "批发价格",
       },
+      unit: {
+        type: String,
+        default: "元/条",
+        trim: true,
+        comment: "批发价格单位",
+      },
+      updatedAt: {
+        type: Date,
+        comment: "批发价格更新时间",
+      },
+      source: {
+        type: String,
+        enum: ["manual", "matching", "import"],
+        default: "matching",
+        comment: "批发价格来源",
+      },
+      // 关联的匹配记录
+      lastMatchingRecord: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "MatchingRecord",
+        comment: "最后一次匹配记录ID",
+      },
     },
 
     // === 匹配学习相关 ===

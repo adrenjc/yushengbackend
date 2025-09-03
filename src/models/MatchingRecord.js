@@ -478,14 +478,37 @@ MatchingRecordSchema.methods.recordUserBehavior = function (
   return this.save()
 }
 
-// 静态方法：获取待审核记录
+// 静态方法：获取待审核记录（包括异常记录）
 MatchingRecordSchema.statics.getPendingReviews = function (
   filters = {},
-  limit = 50
+  limit = 50,
+  sortBy = "priority"
 ) {
   const query = {
-    status: "reviewing",
+    status: { $in: ["reviewing", "exception"] },
     ...filters,
+  }
+
+  let sortCondition = {}
+  switch (sortBy) {
+    case "score":
+      // 按匹配分数降序排序（最高分在前）
+      sortCondition = { "candidates.0.score.total": -1, priority: -1 }
+      break
+    case "priority":
+      // 按优先级降序排序（高优先级在前）
+      sortCondition = { priority: -1, createdAt: 1 }
+      break
+    case "confidence":
+      // 按置信度降序排序
+      sortCondition = { "candidates.0.confidence": -1, priority: -1 }
+      break
+    case "name":
+      // 按原始名称升序排序
+      sortCondition = { "originalData.name": 1 }
+      break
+    default:
+      sortCondition = { priority: -1, createdAt: 1 }
   }
 
   return this.find(query)
@@ -499,7 +522,7 @@ MatchingRecordSchema.statics.getPendingReviews = function (
       "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
     )
     .populate("selectedMatch.confirmedBy", "name email")
-    .sort({ priority: -1, createdAt: 1 })
+    .sort(sortCondition)
     .limit(limit)
 }
 

@@ -148,6 +148,10 @@ router.get(
       page: require("joi").number().integer().min(1).default(1),
       limit: require("joi").number().integer().min(1).max(100).default(20),
       priority: require("joi").string().valid("high", "medium", "low"),
+      sortBy: require("joi")
+        .string()
+        .valid("priority", "score", "confidence", "name")
+        .default("priority"),
     }),
   }),
   getPendingReviews

@@ -322,6 +322,11 @@ const queryParamsSchema = {
     "retailPriceRange.max": Joi.number().min(0).allow(""),
     "launchDateRange.start": Joi.string().allow(""),
     "launchDateRange.end": Joi.string().allow(""),
+
+    // 批发价筛选参数
+    hasWholesalePrice: Joi.string().valid("yes", "no", "all").allow(""),
+    wholesalePriceMin: Joi.number().min(0).allow(""),
+    wholesalePriceMax: Joi.number().min(0).allow(""),
   }),
 }
 

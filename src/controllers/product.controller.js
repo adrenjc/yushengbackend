@@ -19,6 +19,11 @@ const path = require("path")
  * 获取商品列表
  */
 const getProducts = asyncHandler(async (req, res) => {
+  // 禁用缓存
+  res.set("Cache-Control", "no-cache, no-store, must-revalidate")
+  res.set("Pragma", "no-cache")
+  res.set("Expires", "0")
+
   const {
     page = 1,
     limit = 20,
@@ -35,6 +40,10 @@ const getProducts = asyncHandler(async (req, res) => {
     sort = "updatedAt",
     order = "desc",
     templateId,
+    // 批发价相关筛选
+    hasWholesalePrice,
+    wholesalePriceMin,
+    wholesalePriceMax,
   } = req.query
 
   // 构建查询条件
@@ -80,8 +89,53 @@ const getProducts = asyncHandler(async (req, res) => {
   }
 
   // 爆珠筛选
-  if (hasPop !== undefined) {
-    query["features.hasPop"] = hasPop === "true"
+  if (hasPop !== undefined && hasPop !== "all") {
+    if (hasPop === "true") {
+      query["features.hasPop"] = true
+    } else if (hasPop === "false") {
+      query.$and = query.$and || []
+      query.$and.push({
+        $or: [
+          { "features.hasPop": { $exists: false } },
+          { "features.hasPop": false },
+          { "features.hasPop": null },
+        ],
+      })
+    }
+  }
+
+  // 批发价筛选
+  if (hasWholesalePrice !== undefined && hasWholesalePrice !== "all") {
+    if (hasWholesalePrice === "yes") {
+      // 有批发价：批发价字段存在且大于0
+      query["wholesale.price"] = { $exists: true, $gt: 0 }
+    } else if (hasWholesalePrice === "no") {
+      // 没有批发价：批发价字段不存在或为空或为0
+      query.$and = query.$and || []
+      query.$and.push({
+        $or: [
+          { "wholesale.price": { $exists: false } },
+          { "wholesale.price": null },
+          { "wholesale.price": 0 },
+          { "wholesale.price": { $lte: 0 } },
+        ],
+      })
+    }
+  }
+
+  // 批发价格范围筛选
+  if (wholesalePriceMin || wholesalePriceMax) {
+    // 保留已有的条件，避免覆盖 hasWholesalePrice 的条件
+    const existingCondition = query["wholesale.price"] || {}
+
+    if (wholesalePriceMin) {
+      existingCondition.$gte = parseFloat(wholesalePriceMin)
+    }
+    if (wholesalePriceMax) {
+      existingCondition.$lte = parseFloat(wholesalePriceMax)
+    }
+
+    query["wholesale.price"] = existingCondition
   }
 
   // 文本搜索
@@ -102,6 +156,7 @@ const getProducts = asyncHandler(async (req, res) => {
   sortConfig[sort] = order === "desc" ? -1 : 1
 
   // 执行查询
+
   const [products, total] = await Promise.all([
     Product.find(query)
       .sort(sortConfig)
@@ -789,6 +844,10 @@ const getAllProductIds = asyncHandler(async (req, res) => {
     hasPop,
     category = "",
     isActive,
+    // 批发价相关筛选
+    hasWholesalePrice,
+    wholesalePriceMin,
+    wholesalePriceMax,
   } = req.query
 
   if (!templateId) {
@@ -832,8 +891,53 @@ const getAllProductIds = asyncHandler(async (req, res) => {
   }
 
   // 爆珠筛选
-  if (hasPop !== undefined) {
-    query["features.hasPop"] = hasPop === "true"
+  if (hasPop !== undefined && hasPop !== "all") {
+    if (hasPop === "true") {
+      query["features.hasPop"] = true
+    } else if (hasPop === "false") {
+      query.$and = query.$and || []
+      query.$and.push({
+        $or: [
+          { "features.hasPop": { $exists: false } },
+          { "features.hasPop": false },
+          { "features.hasPop": null },
+        ],
+      })
+    }
+  }
+
+  // 批发价筛选
+  if (hasWholesalePrice !== undefined && hasWholesalePrice !== "all") {
+    if (hasWholesalePrice === "yes") {
+      // 有批发价：批发价字段存在且大于0
+      query["wholesale.price"] = { $exists: true, $gt: 0 }
+    } else if (hasWholesalePrice === "no") {
+      // 没有批发价：批发价字段不存在或为空或为0
+      query.$and = query.$and || []
+      query.$and.push({
+        $or: [
+          { "wholesale.price": { $exists: false } },
+          { "wholesale.price": null },
+          { "wholesale.price": 0 },
+          { "wholesale.price": { $lte: 0 } },
+        ],
+      })
+    }
+  }
+
+  // 批发价格范围筛选
+  if (wholesalePriceMin || wholesalePriceMax) {
+    // 保留已有的条件，避免覆盖 hasWholesalePrice 的条件
+    const existingCondition = query["wholesale.price"] || {}
+
+    if (wholesalePriceMin) {
+      existingCondition.$gte = parseFloat(wholesalePriceMin)
+    }
+    if (wholesalePriceMax) {
+      existingCondition.$lte = parseFloat(wholesalePriceMax)
+    }
+
+    query["wholesale.price"] = existingCondition
   }
 
   // 文本搜索

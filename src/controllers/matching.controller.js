@@ -794,6 +794,10 @@ async function processMatchingTask(taskId) {
           }
           record.status = "confirmed"
           task.progress.confirmedItems++
+
+          // 保存记录后立即更新商品批发价
+          await record.save()
+          await updateProductWholesalePrice(record, candidates[0].productId)
         } else if (
           bestScore >= task.config.threshold &&
           candidates.length > 0
@@ -813,7 +817,10 @@ async function processMatchingTask(taskId) {
           task.progress.exceptionItems++
         }
 
-        await record.save()
+        // 只有非自动确认的记录才需要在这里保存
+        if (record.status !== "confirmed") {
+          await record.save()
+        }
 
         processedCount++
         task.progress.processedItems = processedCount
@@ -1040,15 +1047,24 @@ const getMatchingTaskById = asyncHandler(async (req, res) => {
  * 获取待审核的匹配记录
  */
 const getPendingReviews = asyncHandler(async (req, res) => {
-  const { taskId, page = 1, limit = 20, priority } = req.query
+  const {
+    taskId,
+    page = 1,
+    limit = 20,
+    priority,
+    sortBy = "priority",
+  } = req.query
 
   const filters = {}
   if (taskId) filters.taskId = taskId
   if (priority) filters.priority = priority
 
   const [records, total] = await Promise.all([
-    MatchingRecord.getPendingReviews(filters, parseInt(limit)),
-    MatchingRecord.countDocuments({ status: "reviewing", ...filters }),
+    MatchingRecord.getPendingReviews(filters, parseInt(limit), sortBy),
+    MatchingRecord.countDocuments({
+      status: { $in: ["reviewing", "exception"] },
+      ...filters,
+    }),
   ])
 
   res.json({
@@ -1128,6 +1144,9 @@ const reviewMatchingRecord = asyncHandler(async (req, res) => {
 
   if (action === "confirm" && productId) {
     result = await record.confirmMatch(productId, req.user._id, note, "manual")
+
+    // 更新商品的批发价信息
+    await updateProductWholesalePrice(record, productId)
   } else if (action === "reject") {
     result = await record.rejectMatch(req.user._id, note)
   } else {
@@ -1246,7 +1265,8 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
         continue
       }
 
-      if (record.status !== "reviewing") {
+      // 允许对 "reviewing" 和 "exception" 状态进行批量审核
+      if (record.status !== "reviewing" && record.status !== "exception") {
         results.failed.push({
           recordId,
           error: "记录状态不允许审核",
@@ -1270,6 +1290,9 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
           note || "批量确认",
           "manual"
         )
+
+        // 更新商品的批发价信息
+        await updateProductWholesalePrice(record, productId)
       } else {
         result = await record.rejectMatch(req.user._id, note || "批量拒绝")
       }
@@ -1518,7 +1541,7 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
  */
 const exportMatchingResults = asyncHandler(async (req, res) => {
   const { taskId } = req.params
-  const { format = "excel" } = req.query
+  const { format = "excel", sortBy = "confidence_desc" } = req.query
 
   const task = await MatchingTask.findById(taskId)
   if (!task) {
@@ -1564,23 +1587,63 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
   }
   headerRow.alignment = { horizontal: "center" }
 
-  // 添加数据行 - 只包含已确认的记录，过滤掉匹配信息
-  records
-    .filter(
-      (record) =>
-        record.status === "confirmed" && record.selectedMatch?.productId
-    )
-    .forEach((record, index) => {
-      worksheet.addRow({
-        matchedName: record.selectedMatch?.productId?.name || "",
-        boxCode: record.selectedMatch?.productId?.boxCode || "",
-        barcode: record.selectedMatch?.productId?.barcode || "",
-        companyPrice: record.selectedMatch?.productId?.companyPrice || 0,
-        matchedBrand: record.selectedMatch?.productId?.brand || "",
-        originalName: record.originalData.name || "",
-        originalPrice: record.originalData.price || 0,
-      })
+  // 只导出已确认且有匹配商品的记录
+  let exportable = records.filter(
+    (r) => r.status === "confirmed" && r.selectedMatch?.productId
+  )
+
+  // 根据 sortBy 排序
+  const getCompanyPrice = (r) =>
+    r.selectedMatch?.productId?.pricing?.companyPrice ||
+    r.selectedMatch?.productId?.pricing?.retailPrice ||
+    0
+
+  switch (sortBy) {
+    case "confidence_desc":
+      exportable = exportable.sort(
+        (a, b) =>
+          (b.selectedMatch?.confidence || 0) -
+          (a.selectedMatch?.confidence || 0)
+      )
+      break
+    case "confidence_asc":
+      exportable = exportable.sort(
+        (a, b) =>
+          (a.selectedMatch?.confidence || 0) -
+          (b.selectedMatch?.confidence || 0)
+      )
+      break
+    case "price_desc":
+      exportable = exportable.sort(
+        (a, b) => getCompanyPrice(b) - getCompanyPrice(a)
+      )
+      break
+    case "price_asc":
+      exportable = exportable.sort(
+        (a, b) => getCompanyPrice(a) - getCompanyPrice(b)
+      )
+      break
+    default:
+      break
+  }
+
+  // 添加数据行
+  exportable.forEach((record) => {
+    worksheet.addRow({
+      matchedName: record.selectedMatch?.productId?.name || "",
+      boxCode: record.selectedMatch?.productId?.boxCode || "",
+      // 条码为产品编码 productCode
+      barcode: record.selectedMatch?.productId?.productCode || "",
+      // 公司价读取 pricing.companyPrice，若无则回退到零售价
+      companyPrice:
+        record.selectedMatch?.productId?.pricing?.companyPrice ||
+        record.selectedMatch?.productId?.pricing?.retailPrice ||
+        0,
+      matchedBrand: record.selectedMatch?.productId?.brand || "",
+      originalName: record.originalData.name || "",
+      originalPrice: record.originalData.price || 0,
     })
+  })
 
   // 设置列宽自适应
   worksheet.columns.forEach((column) => {
@@ -1607,9 +1670,7 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
   await workbook.xlsx.write(res)
 
   // 计算导出的记录数（只包含已确认的记录）
-  const exportedRecords = records.filter(
-    (record) => record.status === "confirmed" && record.selectedMatch?.productId
-  )
+  const exportedRecords = exportable
 
   // 记录操作日志
   logOperation("导出匹配结果", req.user, {
@@ -1626,6 +1687,53 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
     userId: req.user._id,
   })
 })
+
+/**
+ * 更新商品的批发价信息
+ */
+async function updateProductWholesalePrice(record, productId) {
+  try {
+    // 获取原始批发价格
+    const originalPrice = record.originalData.price
+    const originalName = record.originalData.name
+
+    if (!originalPrice || originalPrice <= 0) {
+      logger.warn("批发价格无效，跳过更新", {
+        recordId: record._id,
+        productId,
+        originalPrice,
+      })
+      return
+    }
+
+    // 更新商品的批发价信息
+    const updateData = {
+      "wholesale.name": originalName,
+      "wholesale.price": originalPrice,
+      "wholesale.unit": record.originalData.unit || "元/条",
+      "wholesale.updatedAt": new Date(),
+      "wholesale.source": "matching",
+      "wholesale.lastMatchingRecord": record._id,
+    }
+
+    await Product.findByIdAndUpdate(productId, updateData, { new: true })
+
+    logger.info("商品批发价更新成功", {
+      productId,
+      recordId: record._id,
+      originalName,
+      originalPrice,
+      updatedAt: new Date(),
+    })
+  } catch (error) {
+    logger.error("更新商品批发价失败", {
+      recordId: record._id,
+      productId,
+      error: error.message,
+    })
+    // 不抛出错误，避免影响主流程
+  }
+}
 
 /**
  * 获取所有匹配成功的商品
@@ -1660,7 +1768,11 @@ const getMatchedProducts = asyncHandler(async (req, res) => {
           : record.updatedAt
 
       const originalPrice = record.originalData.price || 0
-      const companyPrice = record.selectedMatch.productId.companyPrice || 0
+      const companyPrice =
+        (record.selectedMatch.productId.pricing &&
+          (record.selectedMatch.productId.pricing.companyPrice ||
+            record.selectedMatch.productId.pricing.retailPrice)) ||
+        0
       const quantity = record.originalData.quantity || 1
 
       return {

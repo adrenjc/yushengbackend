@@ -18,6 +18,7 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "访问令牌缺失",
+        isAuthError: true,
       })
     }
 
@@ -61,6 +62,7 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "用户不存在",
+        isAuthError: true,
       })
     }
 
@@ -68,6 +70,7 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "用户账户已被禁用",
+        isAuthError: true,
       })
     }
 
@@ -76,6 +79,7 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "账户已被锁定，请稍后再试",
+        isAuthError: true,
       })
     }
 
@@ -87,6 +91,7 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "无效的访问令牌",
+        isAuthError: true,
       })
     }
 
@@ -94,6 +99,7 @@ const authenticateToken = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "访问令牌已过期",
+        isAuthError: true,
       })
     }
 
@@ -117,6 +123,7 @@ const authorize = (permissions) => {
         return res.status(401).json({
           success: false,
           message: "用户未认证",
+          isAuthError: true,
         })
       }
 
@@ -168,6 +175,7 @@ const requireRole = (roles) => {
         return res.status(401).json({
           success: false,
           message: "用户未认证",
+          isAuthError: true,
         })
       }
 
