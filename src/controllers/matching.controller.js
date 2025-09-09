@@ -1,5 +1,6 @@
 /**
- * 智能匹配系统控制器
+ * 智能匹配系统控制器 - 全新设计
+ * 专注于高准确率的名称匹配，激进的自动确认策略
  */
 const MatchingTask = require("../models/MatchingTask")
 const MatchingRecord = require("../models/MatchingRecord")
@@ -15,505 +16,544 @@ const csv = require("csv-parser")
 const fs = require("fs")
 const path = require("path")
 const mongoose = require("mongoose")
+const MatchingMemory = require("../models/MatchingMemory")
 
 /**
- * 智能匹配算法实现
+ * 全新智能匹配引擎 - 专注名称匹配
  */
-class MatchingEngine {
+class AggressiveMatchingEngine {
   constructor() {
-    // 默认权重配置
-    this.defaultWeights = {
-      name: 0.35, // 名称匹配权重
-      brand: 0.25, // 品牌匹配权重
-      keywords: 0.2, // 关键词匹配权重
-      package: 0.1, // 包装规格权重
-      price: 0.1, // 价格匹配权重
+    // 完全基于名称的权重配置
+    this.weights = {
+      name: 1.0, // 100% 名称权重
+      price: 0.0, // 价格仅用于过滤，不参与评分
     }
 
-    // 置信度阈值
-    this.confidenceThresholds = {
-      auto: 65, // 自动确认阈值（优化后）
-      review: 40, // 需要审核阈值
-      reject: 15, // 自动拒绝阈值
-    }
+    // 动态品牌库
+    this.brands = new Set()
 
-    // 评分优化配置
-    this.scoreBoosts = {
-      exactNameMatch: 20, // 精确名称匹配加分
-      exactBrandMatch: 15, // 精确品牌匹配加分
-      containsAllKeywords: 10, // 包含所有关键词加分
-    }
-  }
+    // 规格词汇（用于识别但不作为强匹配依据）
+    this.specificationWords = new Set([
+      "硬",
+      "软",
+      "细支",
+      "中支",
+      "大支",
+      "粗支",
+      "短支",
+      "长支",
+      "超细",
+      "硬盒",
+      "软盒",
+      "双中支",
+      "爆珠",
+      "薄荷",
+      "醇香",
+      "淡雅",
+    ])
 
-  /**
-   * 执行智能匹配
-   * @param {Object} originalData 原始数据
-   * @param {Array} products 商品库
-   * @param {Object} config 匹配配置
-   * @returns {Array} 匹配候选项
-   */
-  async match(originalData, products, config = {}) {
-    const weights = { ...this.defaultWeights, ...config.weights }
-    const candidates = []
+    // 常见同义词映射（移除规格词）
+    this.synonyms = new Map([
+      ["硬", "硬盒"],
+      ["软", "软盒"],
+      ["薄荷", "爆珠"],
+    ])
 
-    // 预处理原始名称
-    const processedOriginalName = this.preprocessName(originalData.name)
-
-    for (const product of products) {
-      const score = await this.calculateMatchScore(
-        originalData,
-        product,
-        weights,
-        processedOriginalName
-      )
-
-      if (score.total >= this.confidenceThresholds.reject) {
-        candidates.push({
-          productId: product._id,
-          score,
-          confidence: this.getConfidenceLevel(score.total),
-          reasons: this.generateMatchReasons(originalData, product, score),
-          rank: 0, // 将在排序后设置
-        })
-      }
-    }
-
-    // 按总分排序
-    candidates.sort((a, b) => b.score.total - a.score.total)
-
-    // 设置排名
-    candidates.forEach((candidate, index) => {
-      candidate.rank = index + 1
-    })
-
-    return candidates.slice(0, 10) // 返回前10个候选项
-  }
-
-  /**
-   * 计算匹配得分
-   */
-  async calculateMatchScore(
-    originalData,
-    product,
-    weights,
-    processedOriginalName
-  ) {
-    const scores = {
-      name: 0,
-      brand: 0,
-      keywords: 0,
-      package: 0,
-      price: 0,
-      total: 0,
-    }
-
-    // 1. 名称匹配得分
-    scores.name = this.calculateNameScore(
-      processedOriginalName,
-      this.preprocessName(product.name)
-    )
-
-    // 2. 品牌匹配得分
-    scores.brand = this.calculateBrandScore(
-      originalData.brand || this.extractBrandFromName(originalData.name),
-      product.brand
-    )
-
-    // 3. 关键词匹配得分
-    scores.keywords = this.calculateKeywordScore(
-      processedOriginalName,
-      product.keywords || []
-    )
-
-    // 4. 包装规格匹配得分
-    scores.package = this.calculatePackageScore(
-      originalData.name,
-      product.specifications?.packageType || "",
-      product.specifications?.size || ""
-    )
-
-    // 5. 价格匹配得分
-    scores.price = this.calculatePriceScore(
-      originalData.price,
-      product.companyPrice || product.specifications?.price,
-      originalData.priceRange
-    )
-
-    // 计算加权总分
-    let totalScore =
-      scores.name * weights.name +
-      scores.brand * weights.brand +
-      scores.keywords * weights.keywords +
-      scores.package * weights.package +
-      scores.price * weights.price
-
-    // 添加质量加分机制
-    let bonusScore = 0
-
-    // 精确名称匹配加分
-    if (scores.name >= 95) {
-      bonusScore += this.scoreBoosts.exactNameMatch
-    }
-
-    // 精确品牌匹配加分
-    if (scores.brand >= 90) {
-      bonusScore += this.scoreBoosts.exactBrandMatch
-    }
-
-    // 包含所有关键词加分
-    if (scores.keywords >= 80) {
-      bonusScore += this.scoreBoosts.containsAllKeywords
-    }
-
-    // 应用加分，但不超过100分
-    scores.total = Math.min(100, Math.round(totalScore + bonusScore))
-
-    return scores
-  }
-
-  /**
-   * 预处理商品名称
-   */
-  preprocessName(name) {
-    if (!name) return ""
-
-    const processed = name
-      .toLowerCase()
-      .replace(/[（()）]/g, "") // 移除括号
-      .replace(/\s+/g, "") // 移除空格
-      .replace(/[^\u4e00-\u9fa5a-z0-9]/g, "") // 只保留中文、英文、数字
-
-    return processed
-  }
-
-  /**
-   * 计算名称相似度得分 (0-100)
-   */
-  calculateNameScore(name1, name2) {
-    if (!name1 || !name2) return 0
-
-    // Jaccard相似度
-    const jaccardSimilarity = this.jaccardSimilarity(name1, name2)
-
-    // 编辑距离相似度
-    const editDistance = this.levenshteinDistance(name1, name2)
-    const maxLen = Math.max(name1.length, name2.length)
-    const editSimilarity = maxLen > 0 ? (maxLen - editDistance) / maxLen : 0
-
-    // 最长公共子序列相似度
-    const lcsSimilarity =
-      this.longestCommonSubsequence(name1, name2) /
-      Math.max(name1.length, name2.length)
-
-    // 优化加权平均，提高相似度评分
-    let finalScore =
-      (jaccardSimilarity * 0.4 + editSimilarity * 0.4 + lcsSimilarity * 0.2) *
-      100
-
-    // 对高相似度给予额外加分
-    if (finalScore >= 70) {
-      finalScore += 10 // 高相似度额外加10分
-    } else if (finalScore >= 50) {
-      finalScore += 5 // 中等相似度额外加5分
-    }
-
-    return Math.round(Math.max(0, Math.min(100, finalScore)))
-  }
-
-  /**
-   * 计算品牌匹配得分
-   */
-  calculateBrandScore(originalBrand, productBrand) {
-    // 如果都没有品牌信息，给中等分数
-    if (!originalBrand && !productBrand) return 50
-
-    // 如果只有一个有品牌信息，给较低分数
-    if (!originalBrand || !productBrand) return 30
-
-    const brand1 = originalBrand.toLowerCase().trim()
-    const brand2 = productBrand.toLowerCase().trim()
-
-    // 完全匹配
-    if (brand1 === brand2) return 100
-
-    // 包含关系
-    if (brand1.includes(brand2) || brand2.includes(brand1)) return 90
-
-    // 相似度匹配
-    const similarity = this.jaccardSimilarity(brand1, brand2)
-    return Math.round(similarity * 100)
-  }
-
-  /**
-   * 计算关键词匹配得分
-   */
-  calculateKeywordScore(originalName, keywords) {
-    // 提取原始名称的关键词
-    const originalWords = this.extractKeywords(originalName)
-
-    // 如果都没有关键词，给中等分数
-    if ((!keywords || keywords.length === 0) && originalWords.length === 0) {
-      return 50
-    }
-
-    // 如果其中一个没有关键词，给较低分数
-    if (!keywords || keywords.length === 0) return 30
-    if (originalWords.length === 0) return 40
-
-    let matchCount = 0
-
-    for (const keyword of keywords) {
-      const keywordLower = keyword.toLowerCase()
-      for (const word of originalWords) {
-        if (word.includes(keywordLower) || keywordLower.includes(word)) {
-          matchCount++
-          break
-        }
-      }
-    }
-
-    // 基础分数40 + 匹配奖励60
-    const matchRatio = matchCount / Math.max(keywords.length, 1)
-    const score = 40 + matchRatio * 60
-    return Math.round(score)
-  }
-
-  /**
-   * 计算包装规格匹配得分
-   */
-  calculatePackageScore(originalName, packageType, size) {
-    if (!packageType && !size) return 50 // 默认中等分数
-
-    let score = 0
-    const originalLower = originalName.toLowerCase()
-
-    // 检查包装类型
-    if (packageType && originalLower.includes(packageType.toLowerCase())) {
-      score += 60
-    }
-
-    // 检查规格大小
-    if (size && originalLower.includes(size.toLowerCase())) {
-      score += 40
-    }
-
-    return Math.min(100, score)
-  }
-
-  /**
-   * 计算价格匹配得分
-   */
-  calculatePriceScore(originalPrice, productPrice, priceRange) {
-    if (!originalPrice || !productPrice) return 50 // 无价格信息时给中等分数
-
-    const priceDiff = Math.abs(originalPrice - productPrice)
-    const avgPrice = (originalPrice + productPrice) / 2
-
-    // 价格差异百分比
-    const diffPercentage = avgPrice > 0 ? (priceDiff / avgPrice) * 100 : 100
-
-    // 根据价格差异计算得分
-    if (diffPercentage <= 5) return 100 // 5%以内差异
-    if (diffPercentage <= 10) return 90 // 10%以内差异
-    if (diffPercentage <= 20) return 70 // 20%以内差异
-    if (diffPercentage <= 30) return 50 // 30%以内差异
-    if (diffPercentage <= 50) return 30 // 50%以内差异
-    return 10 // 超过50%差异
-  }
-
-  /**
-   * 获取置信度等级
-   */
-  getConfidenceLevel(score) {
-    if (score >= this.confidenceThresholds.auto) return "high"
-    if (score >= this.confidenceThresholds.review) return "medium"
-    return "low"
-  }
-
-  /**
-   * 生成匹配原因
-   */
-  generateMatchReasons(originalData, product, score) {
-    const reasons = []
-
-    if (score.brand >= 80) {
-      reasons.push({
-        type: "brand_match",
-        description: "品牌高度匹配",
-        weight: score.brand / 100,
-      })
-    }
-
-    if (score.name >= 70) {
-      reasons.push({
-        type: "name_similarity",
-        description: "名称相似度高",
-        weight: score.name / 100,
-      })
-    }
-
-    if (score.keywords >= 60) {
-      reasons.push({
-        type: "keyword_match",
-        description: "关键词匹配",
-        weight: score.keywords / 100,
-      })
-    }
-
-    if (score.price >= 70) {
-      reasons.push({
-        type: "price_range",
-        description: "价格范围匹配",
-        weight: score.price / 100,
-      })
-    }
-
-    if (score.package >= 60) {
-      reasons.push({
-        type: "package_type",
-        description: "包装规格匹配",
-        weight: score.package / 100,
-      })
-    }
-
-    return reasons
-  }
-
-  /**
-   * 从名称中提取品牌
-   */
-  extractBrandFromName(name) {
-    // 常见品牌列表（可以从数据库动态获取）
-    const commonBrands = [
-      "熊猫",
-      "黄鹤楼",
-      "南京",
-      "云烟",
+    // 常见品牌词汇（会动态更新）
+    this.commonBrands = [
       "中华",
       "玉溪",
+      "云烟",
       "苏烟",
+      "黄鹤楼",
+      "南京",
       "红塔山",
-      "红河",
-      "红金龙",
       "白沙",
       "芙蓉王",
       "利群",
-      "红旗渠",
-      "泰山",
       "黄山",
       "长白山",
-      "贵烟",
-      "兰州",
-      "哈德门",
-      "红梅",
-      "恒大",
       "双喜",
       "真龙",
       "金叶",
       "娇子",
-      "五叶神",
-      "红云",
-      "石林",
-      "云龙",
-      "红旗香",
-      "金山",
+      "红河",
+      "贵烟",
+      "兰州",
+      "泰山",
       "好猫",
-      "阿诗玛",
+      "红梅",
+      "黄金叶",
+      "五叶神",
       "大重九",
       "将军",
-      "红河道",
+      "红云",
     ]
+  }
 
-    for (const brand of commonBrands) {
-      if (name.includes(brand)) {
-        return brand
+  /**
+   * 设置动态品牌列表
+   */
+  setBrands(brandList) {
+    this.brands = new Set([...this.commonBrands, ...(brandList || [])])
+  }
+
+  /**
+   * 核心匹配方法 - 集成记忆功能
+   */
+  async match(originalData, products, config = {}) {
+    const candidates = []
+    const originalName = this.normalize(originalData.name || "")
+
+    if (!originalName) return []
+
+    // 1. 优先查询记忆匹配（包含模板过滤）
+    let memoryMatches = []
+    try {
+      console.log(`🔍 查询记忆匹配:`, {
+        原始名称: originalData.name,
+        标准化名称: originalName,
+        模板ID: config.templateId,
+      })
+
+      memoryMatches = await MatchingMemory.findMatching(originalName, {
+        limit: 3,
+        minConfidence: 60,
+        includeDeprecated: false,
+        templateId: config.templateId,
+      })
+
+      console.log(`🧠 记忆查询结果: 找到 ${memoryMatches.length} 个匹配项`)
+
+      if (memoryMatches.length > 0) {
+        console.log(
+          `🧠 找到 ${memoryMatches.length} 个记忆匹配项:`,
+          originalData.name,
+          memoryMatches.map((m) => ({
+            标准化名称: m.normalizedWholesaleName,
+            确认次数: m.confirmCount,
+            置信度: m.confidence,
+            商品名称: m.confirmedProductId?.name,
+          }))
+        )
+
+        // 将记忆匹配转换为候选项
+        for (const memory of memoryMatches) {
+          const product = products.find(
+            (p) => p._id.toString() === memory.confirmedProductId._id.toString()
+          )
+
+          if (product) {
+            // 确保trustScore是有效数字，设置默认值
+            const baseTrustScore =
+              Number(memory.trustScore) || memory.confidence || 85
+
+            // 根据确认次数提升分数 - 高确认次数应该有更高分数
+            const confirmCountBonus = Math.min(
+              20,
+              (memory.confirmCount || 1) * 3
+            ) // 每次确认+3分，最多+20分
+            const memoryScore = Math.min(
+              100,
+              Math.max(80, baseTrustScore + confirmCountBonus + 15)
+            ) // 记忆匹配基础加分15，最低80分
+
+            console.log(`🧠 记忆匹配分数计算:`, {
+              商品: memory.confirmedProductId?.name,
+              确认次数: memory.confirmCount,
+              基础分数: baseTrustScore,
+              确认次数加分: confirmCountBonus,
+              最终分数: memoryScore,
+            })
+
+            candidates.push({
+              productId: product._id,
+              score: {
+                name: memoryScore,
+                brand: 100, // 记忆匹配品牌满分
+                total: memoryScore,
+                memoryBonus: confirmCountBonus + 15,
+              },
+              confidence: "high",
+              reasons: [
+                {
+                  type: "memory_match",
+                  description: `记忆匹配 (确认${memory.confirmCount || 1}次)`,
+                  weight: 1.0,
+                },
+              ],
+              rank: 0,
+              isMemoryMatch: true,
+              memorySource: memory,
+            })
+          }
+        }
+      }
+    } catch (memoryError) {
+      console.error("记忆查询失败:", memoryError)
+    }
+
+    // 2. 常规算法匹配
+    for (const product of products) {
+      // 跳过已经通过记忆匹配的商品
+      const alreadyMatched = candidates.some(
+        (c) => c.productId.toString() === product._id.toString()
+      )
+      if (alreadyMatched) continue
+
+      const productName = this.normalize(product.name || "")
+      if (!productName) continue
+
+      const score = this.calculateScore(
+        originalName,
+        productName,
+        originalData,
+        product
+      )
+
+      if (score >= 30) {
+        // 更低门槛，确保有候选项
+        const confidenceLevel = this.getConfidenceLevel(score)
+        const candidate = {
+          productId: product._id,
+          score: {
+            name: score,
+            total: score,
+          },
+          confidence: confidenceLevel,
+          reasons: this.generateReasons(score),
+          rank: 0,
+        }
+
+        console.log(`📊 生成候选项:`, {
+          商品名称: product.name,
+          分数: score,
+          置信度: confidenceLevel,
+          候选项: candidate,
+        })
+
+        candidates.push(candidate)
       }
     }
 
-    return ""
+    // 按分数排序 (记忆匹配优先)
+    candidates.sort((a, b) => {
+      // 记忆匹配优先
+      if (a.isMemoryMatch && !b.isMemoryMatch) return -1
+      if (!a.isMemoryMatch && b.isMemoryMatch) return 1
+      // 同类型按分数排序
+      return b.score.total - a.score.total
+    })
+
+    candidates.forEach((candidate, index) => {
+      candidate.rank = index + 1
+    })
+
+    return candidates.slice(0, 10)
+  }
+
+  /**
+   * 计算匹配分数 - 核心算法
+   */
+  calculateScore(original, product, originalData, productData) {
+    // 1. 预处理文本
+    const orig = this.deepNormalize(original)
+    const prod = this.deepNormalize(product)
+
+    if (!orig || !prod) return 0
+
+    // 2. 品牌一致性检查（提前进行，避免跨品牌高分）
+    if (this.hasBrandConflict(orig, prod)) {
+      return 15 // 品牌冲突直接返回低分
+    }
+
+    // 3. 完全匹配
+    if (orig === prod) return 100
+
+    // 4. 去品牌后完全匹配
+    const origNoBrand = this.removeBrand(orig)
+    const prodNoBrand = this.removeBrand(prod)
+    if (origNoBrand && prodNoBrand && origNoBrand === prodNoBrand) return 98
+
+    // 5. 检查是否主要依赖规格词匹配（降低跨品牌规格词匹配）
+    const specOnlyMatch = this.isSpecificationOnlyMatch(orig, prod)
+    if (specOnlyMatch) {
+      // 如果主要是规格词匹配且品牌不同，大幅降分
+      const origBrand = this.detectBrand(orig)
+      const prodBrand = this.detectBrand(prod)
+      if (origBrand && prodBrand && origBrand !== prodBrand) {
+        return Math.min(50, this.calculateSimilarity(orig, prod)) // 最高50分
+      }
+    }
+
+    // 6. 容错匹配（括号、顺序、同义词）
+    const tolerance = this.tolerantMatch(orig, prod)
+    if (tolerance >= 95) return tolerance
+
+    // 7. 包含匹配
+    const containment = this.calculateContainment(orig, prod)
+    if (containment >= 85) return containment
+
+    // 8. 编辑距离匹配
+    const similarity = this.calculateSimilarity(orig, prod)
+
+    // 9. 价格合理性检查（仅用于加分或减分）
+    const priceBonus = this.calculatePriceBonus(originalData, productData)
+
+    let finalScore = similarity + priceBonus
+
+    return Math.max(0, Math.min(100, Math.round(finalScore)))
+  }
+
+  /**
+   * 文本标准化
+   */
+  normalize(text) {
+    if (!text) return ""
+    return text
+      .toLowerCase()
+      .replace(/[（()）\[\]【】]/g, "") // 移除所有括号
+      .replace(/[·•\-_\s]/g, "") // 移除分隔符和空格
+      .replace(/[^\u4e00-\u9fa5a-z0-9]/g, "") // 只保留中文英文数字
+  }
+
+  /**
+   * 深度标准化（处理同义词）
+   */
+  deepNormalize(text) {
+    let result = this.normalize(text)
+
+    // 应用同义词替换
+    for (const [key, value] of this.synonyms) {
+      result = result.replace(new RegExp(key, "g"), value)
+    }
+
+    // 数字标准化
+    result = result
+      .replace(/一/g, "1")
+      .replace(/二/g, "2")
+      .replace(/三/g, "3")
+      .replace(/四/g, "4")
+      .replace(/五/g, "5")
+      .replace(/六/g, "6")
+      .replace(/七/g, "7")
+      .replace(/八/g, "8")
+      .replace(/九/g, "9")
+      .replace(/十/g, "10")
+
+    return result
+  }
+
+  /**
+   * 移除品牌词
+   */
+  removeBrand(text) {
+    let result = text
+    for (const brand of this.brands) {
+      const normalizedBrand = this.normalize(brand)
+      if (normalizedBrand && result.includes(normalizedBrand)) {
+        result = result.replace(normalizedBrand, "")
+        break // 只移除第一个匹配的品牌
+      }
+    }
+    return result.trim()
+  }
+
+  /**
+   * 检查是否主要依赖规格词匹配
+   */
+  isSpecificationOnlyMatch(orig, prod) {
+    // 移除品牌和规格词，看剩余内容是否很少
+    const origNoBrand = this.removeBrand(orig)
+    const prodNoBrand = this.removeBrand(prod)
+
+    const origNoSpec = this.removeSpecifications(origNoBrand)
+    const prodNoSpec = this.removeSpecifications(prodNoBrand)
+
+    // 如果去除规格词后，剩余内容很少且不相似，说明主要依赖规格词
+    return (
+      (origNoSpec.length <= 2 || prodNoSpec.length <= 2) &&
+      origNoSpec !== prodNoSpec
+    )
+  }
+
+  /**
+   * 移除规格词
+   */
+  removeSpecifications(text) {
+    let result = text
+    for (const spec of this.specificationWords) {
+      result = result.replace(new RegExp(spec, "g"), "")
+    }
+    return result.trim()
+  }
+
+  /**
+   * 容错匹配（处理括号、顺序等）
+   */
+  tolerantMatch(orig, prod) {
+    // 展开括号内容
+    const expandBrackets = (str) => {
+      return str.replace(/\(([^)]+)\)/g, "$1")
+    }
+
+    const origExpanded = expandBrackets(orig)
+    const prodExpanded = expandBrackets(prod)
+
+    // 字符排序比较（忽略顺序）
+    const sortChars = (str) => str.split("").sort().join("")
+
+    const origSorted = sortChars(this.removeBrand(origExpanded))
+    const prodSorted = sortChars(this.removeBrand(prodExpanded))
+
+    if (origSorted && prodSorted && origSorted === prodSorted) return 97
+
+    // 长度差异容忍
+    const lengthDiff = Math.abs(origExpanded.length - prodExpanded.length)
+    if (lengthDiff <= 2) {
+      if (
+        origExpanded.includes(prodExpanded) ||
+        prodExpanded.includes(origExpanded)
+      ) {
+        return 95
+      }
+    }
+
+    return 0
+  }
+
+  /**
+   * 包含关系匹配
+   */
+  calculateContainment(orig, prod) {
+    const origClean = this.removeBrand(orig)
+    const prodClean = this.removeBrand(prod)
+
+    if (!origClean || !prodClean) return 0
+
+    // 完全包含
+    if (origClean.includes(prodClean) || prodClean.includes(origClean)) {
+      const ratio =
+        Math.min(origClean.length, prodClean.length) /
+        Math.max(origClean.length, prodClean.length)
+      return 80 + ratio * 15 // 80-95分
+    }
+
+    // 部分包含 - 更宽松的匹配
+    const shortStr = origClean.length < prodClean.length ? origClean : prodClean
+    const longStr = origClean.length < prodClean.length ? prodClean : origClean
+
+    if (shortStr.length >= 2 && longStr.includes(shortStr)) {
+      return 75 // 部分包含给75分
+    }
+
+    // 关键词包含
+    const origWords = this.extractKeywords(origClean)
+    const prodWords = this.extractKeywords(prodClean)
+
+    const intersection = origWords.filter((word) => prodWords.includes(word))
+    const union = [...new Set([...origWords, ...prodWords])]
+
+    if (intersection.length > 0 && union.length > 0) {
+      const jaccard = intersection.length / union.length
+      return Math.round(60 + jaccard * 25) // 60-85分
+    }
+
+    return 0
+  }
+
+  /**
+   * 相似度计算
+   */
+  calculateSimilarity(orig, prod) {
+    // Levenshtein距离
+    const levenshtein = this.levenshteinDistance(orig, prod)
+    const maxLen = Math.max(orig.length, prod.length)
+    const similarity = maxLen > 0 ? (maxLen - levenshtein) / maxLen : 0
+
+    // Jaccard相似度
+    const set1 = new Set(orig)
+    const set2 = new Set(prod)
+    const intersection = new Set([...set1].filter((x) => set2.has(x)))
+    const union = new Set([...set1, ...set2])
+    const jaccard = union.size > 0 ? intersection.size / union.size : 0
+
+    // 组合相似度
+    const combined = similarity * 0.7 + jaccard * 0.3
+
+    // 转换为分数
+    let score = combined * 100
+
+    // 高相似度奖励
+    if (similarity >= 0.9) score += 10
+    else if (similarity >= 0.8) score += 5
+
+    return Math.round(score)
+  }
+
+  /**
+   * 价格合理性加分
+   */
+  calculatePriceBonus(originalData, productData) {
+    const origPrice = originalData.price || 0
+    const prodPrice =
+      productData.companyPrice || productData.specifications?.price || 0
+
+    if (!origPrice || !prodPrice) return 0
+
+    const diff = Math.abs(origPrice - prodPrice)
+    const avgPrice = (origPrice + prodPrice) / 2
+    const relDiff = avgPrice > 0 ? diff / avgPrice : 1
+
+    // 价格接近加分
+    if (diff <= 10) return 5 // 差异10元内 +5分
+    if (diff <= 30) return 3 // 差异30元内 +3分
+    if (relDiff <= 0.1) return 5 // 相对差异10%内 +5分
+    if (relDiff <= 0.2) return 2 // 相对差异20%内 +2分
+
+    // 价格差异过大减分
+    if (diff > 200 || relDiff > 0.5) return -10
+
+    return 0
+  }
+
+  /**
+   * 检查品牌冲突
+   */
+  hasBrandConflict(orig, prod) {
+    const origBrand = this.detectBrand(orig)
+    const prodBrand = this.detectBrand(prod)
+
+    if (origBrand && prodBrand && origBrand !== prodBrand) {
+      return true
+    }
+    return false
+  }
+
+  /**
+   * 检测品牌
+   */
+  detectBrand(text) {
+    for (const brand of this.brands) {
+      const normalizedBrand = this.normalize(brand)
+      if (normalizedBrand && text.includes(normalizedBrand)) {
+        return normalizedBrand
+      }
+    }
+    return null
   }
 
   /**
    * 提取关键词
    */
-  extractKeywords(name) {
-    // 简单的中文分词（实际项目中可以使用专业的分词库）
-    const keywords = []
-    const commonKeywords = [
-      "硬",
-      "软",
-      "细支",
-      "中支",
-      "爆珠",
-      "薄荷",
-      "经典",
-      "特醇",
-      "新版",
-      "典藏",
-      "珍品",
-      "精品",
-      "豪华",
-      "至尊",
-      "王者",
-      "帝王",
-      "1916",
-      "九五",
-      "五星",
-      "红",
-      "蓝",
-      "金",
-      "银",
-      "白",
-      "黑",
-      "醇香",
-      "清香",
-      "浓香",
-      "淡雅",
-      "醇厚",
-      "绵柔",
-      "甘醇",
-      "香醇",
-      "短支",
-      "长支",
-      "超细",
-      "加长",
-      "双爆",
-      "三爆",
-      "冰爆",
-      "果爆",
-      "限量",
-      "纪念",
-      "特供",
-      "出口",
-      "内供",
-      "专供",
-      "定制",
-      "尊享",
-    ]
-
-    for (const keyword of commonKeywords) {
-      if (name.includes(keyword)) {
-        keywords.push(keyword)
-      }
-    }
-
-    return keywords
+  extractKeywords(text) {
+    // 简单分词：2个字符以上的连续片段
+    const matches = text.match(/[\u4e00-\u9fa5]{2,}/g) || []
+    return [...new Set(matches)]
   }
 
   /**
-   * Jaccard相似度计算
-   */
-  jaccardSimilarity(str1, str2) {
-    const set1 = new Set(str1)
-    const set2 = new Set(str2)
-    const intersection = new Set([...set1].filter((x) => set2.has(x)))
-    const union = new Set([...set1, ...set2])
-
-    return union.size > 0 ? intersection.size / union.size : 0
-  }
-
-  /**
-   * 编辑距离计算
+   * 计算编辑距离
    */
   levenshteinDistance(str1, str2) {
     const m = str1.length
@@ -539,30 +579,170 @@ class MatchingEngine {
   }
 
   /**
-   * 最长公共子序列
+   * 获取置信度等级
    */
-  longestCommonSubsequence(str1, str2) {
-    const m = str1.length
-    const n = str2.length
-    const dp = Array(m + 1)
-      .fill(null)
-      .map(() => Array(n + 1).fill(0))
+  getConfidenceLevel(score) {
+    if (score >= 80) return "high"
+    if (score >= 60) return "medium"
+    return "low"
+  }
 
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        if (str1[i - 1] === str2[j - 1]) {
-          dp[i][j] = dp[i - 1][j - 1] + 1
+  /**
+   * 生成匹配原因
+   */
+  generateReasons(score) {
+    const reasons = []
+    if (score >= 95) {
+      reasons.push({
+        type: "name_similarity",
+        description: "名称高度匹配",
+        weight: 1.0,
+      })
+    } else if (score >= 85) {
+      reasons.push({
+        type: "name_similarity",
+        description: "名称强相似",
+        weight: 0.9,
+      })
+    } else if (score >= 70) {
+      reasons.push({
+        type: "name_similarity",
+        description: "名称相似",
+        weight: 0.8,
+      })
+    } else {
+      reasons.push({
+        type: "name_similarity",
+        description: "名称弱相似",
+        weight: 0.6,
+      })
+    }
+    return reasons
+  }
+
+  /**
+   * 计算两个字符串的相似度 (0-100)
+   */
+  calculateSimilarity(str1, str2) {
+    if (!str1 || !str2) return 0
+    if (str1 === str2) return 100
+
+    // 标准化处理
+    const normalized1 = this.deepNormalize(str1)
+    const normalized2 = this.deepNormalize(str2)
+
+    if (normalized1 === normalized2) return 100
+
+    // 计算Levenshtein距离
+    const distance = this.levenshteinDistance(normalized1, normalized2)
+    const maxLength = Math.max(normalized1.length, normalized2.length)
+
+    if (maxLength === 0) return 100
+
+    // 转换为相似度百分比
+    const similarity = ((maxLength - distance) / maxLength) * 100
+    return Math.max(0, similarity)
+  }
+
+  /**
+   * 计算Levenshtein距离
+   */
+  levenshteinDistance(str1, str2) {
+    const matrix = []
+
+    // 初始化矩阵
+    for (let i = 0; i <= str2.length; i++) {
+      matrix[i] = [i]
+    }
+
+    for (let j = 0; j <= str1.length; j++) {
+      matrix[0][j] = j
+    }
+
+    // 填充矩阵
+    for (let i = 1; i <= str2.length; i++) {
+      for (let j = 1; j <= str1.length; j++) {
+        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1]
         } else {
-          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1])
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1, // 替换
+            matrix[i][j - 1] + 1, // 插入
+            matrix[i - 1][j] + 1 // 删除
+          )
         }
       }
     }
 
-    return dp[m][n]
+    return matrix[str2.length][str1.length]
   }
 }
 
-const matchingEngine = new MatchingEngine()
+const matchingEngine = new AggressiveMatchingEngine()
+
+/**
+ * 检查产品绑定冲突 - 更宽松的检查
+ */
+async function hasProductBindingConflict(productId, taskId, originalName) {
+  try {
+    const normalizedCurrent = matchingEngine.deepNormalize(originalName || "")
+
+    // 1. 任务内唯一性检查（更严格 - 同一任务内不允许重复）
+    const existingInTask = await MatchingRecord.findOne({
+      taskId,
+      status: "confirmed",
+      "selectedMatch.productId": productId,
+    }).lean()
+
+    if (existingInTask) {
+      const existingName = matchingEngine.deepNormalize(
+        existingInTask.originalData?.name || ""
+      )
+      // 如果是完全相同的名称，允许（可能是重复数据）
+      if (existingName === normalizedCurrent) return false
+      return true
+    }
+
+    // 2. 全局冲突检查 - 大幅放宽条件
+    const latestGlobal = await MatchingRecord.findOne({
+      status: "confirmed",
+      "selectedMatch.productId": productId,
+    })
+      .sort({ updatedAt: -1 })
+      .lean()
+
+    if (latestGlobal?.originalData?.name) {
+      const normalizedLatest = matchingEngine.deepNormalize(
+        latestGlobal.originalData.name
+      )
+
+      // 更宽松的冲突判断：只有差异很大且没有包含关系才算冲突
+      if (normalizedLatest && normalizedCurrent) {
+        // 如果两个名称有包含关系或相似度很高，不算冲突
+        if (
+          normalizedLatest.includes(normalizedCurrent) ||
+          normalizedCurrent.includes(normalizedLatest)
+        ) {
+          return false
+        }
+
+        // 计算相似度，如果相似度>60%，不算冲突
+        const similarity = matchingEngine.calculateSimilarity(
+          normalizedLatest,
+          normalizedCurrent
+        )
+        if (similarity > 60) return false
+
+        // 只有完全不同且相似度很低才算真正冲突
+        return similarity < 30
+      }
+    }
+
+    return false
+  } catch (e) {
+    return false
+  }
+}
 
 /**
  * 创建匹配任务
@@ -574,30 +754,22 @@ const createMatchingTask = asyncHandler(async (req, res) => {
 
   const {
     templateId,
-    threshold = 65,
-    autoConfirmThreshold = 90,
+    threshold = 50, // 大幅降低审核阈值，让更多记录进入人工管理
+    autoConfirmThreshold = 95, // 大幅提高自动确认阈值，减少自动确认错误
     description = "",
     priority = "normal",
   } = req.body
 
-  // 验证templateId参数
   if (!templateId) {
     throw new BusinessError("必须指定商品模板ID")
   }
 
-  // 验证模板是否存在
   const ProductTemplate = require("../models/ProductTemplate")
   const template = await ProductTemplate.findById(templateId)
   if (!template) {
     throw new NotFoundError("商品模板")
   }
 
-  logger.info("接收到文件上传", {
-    原始文件名: req.file.originalname,
-    文件大小: req.file.size,
-  })
-
-  // 创建匹配任务
   const task = new MatchingTask({
     templateId,
     templateName: template.name,
@@ -619,16 +791,9 @@ const createMatchingTask = asyncHandler(async (req, res) => {
 
   await task.save()
 
-  // 记录操作日志
   logOperation("创建匹配任务", req.user, {
     taskId: task._id,
     filename: task.originalFilename,
-  })
-
-  logger.info("匹配任务创建成功", {
-    taskId: task._id,
-    filename: task.originalFilename,
-    userId: req.user._id,
   })
 
   res.status(201).json({
@@ -653,10 +818,8 @@ const executeMatchingTask = asyncHandler(async (req, res) => {
     throw new BusinessError("任务状态不允许执行")
   }
 
-  // 开始任务
   await task.start()
 
-  // 异步执行匹配（不阻塞响应）
   processMatchingTask(task._id).catch((error) => {
     logger.error("匹配任务执行失败", { taskId: task._id, error: error.message })
   })
@@ -669,7 +832,7 @@ const executeMatchingTask = asyncHandler(async (req, res) => {
 })
 
 /**
- * 异步处理匹配任务
+ * 异步处理匹配任务 - 新算法
  */
 async function processMatchingTask(taskId) {
   const task = await MatchingTask.findById(taskId)
@@ -679,41 +842,38 @@ async function processMatchingTask(taskId) {
     logger.info("开始处理匹配任务", { taskId })
 
     // 1. 解析文件
-    const parseStart = Date.now()
     const rawData = await parseUploadedFile(
       task.filePath,
       task.originalFilename
     )
-    task.statistics.processingTime.parsing = Date.now() - parseStart
-
     logger.info("文件解析完成", { taskId, 解析条数: rawData.length })
 
-    // 2. 获取商品库（仅使用指定模板下的商品）
+    // 2. 获取商品库
     const products = await Product.find({
       templateId: task.templateId,
       isActive: true,
     }).lean()
-    logger.info("商品库加载完成", {
-      taskId,
-      templateId: task.templateId,
-      商品库大小: products.length,
-    })
 
     if (products.length === 0) {
       throw new Error("商品库为空，请先添加商品数据")
     }
 
-    // 3. 更新任务进度
+    // 3. 设置动态品牌
+    const brands = [...new Set(products.map((p) => p.brand).filter(Boolean))]
+    matchingEngine.setBrands(brands)
+    logger.info("已设置动态品牌", { taskId, brandCount: brands.length })
+
+    // 4. 更新任务进度
     task.progress.totalItems = rawData.length
     await task.updateProgress(task.progress)
 
-    // 4. 执行匹配
-    const matchingStart = Date.now()
+    // 5. 执行匹配
     let processedCount = 0
+    let autoConfirmedCount = 0
 
     for (const [index, item] of rawData.entries()) {
       try {
-        // 提取和处理价格
+        // 解析价格
         const priceValue =
           item.price ||
           item.批发价格 ||
@@ -726,13 +886,7 @@ async function processMatchingTask(taskId) {
             ? parseFloat(priceValue.replace(/[^\d.]/g, ""))
             : Number(priceValue)
 
-        logger.info("价格处理", {
-          原始价格: priceValue,
-          解析后价格: parsedPrice,
-          原始数据: item,
-        })
-
-        // 创建匹配记录（适应真实数据格式：只有批发名和批发价格）
+        // 创建匹配记录
         const record = new MatchingRecord({
           taskId: task._id,
           originalData: {
@@ -744,90 +898,252 @@ async function processMatchingTask(taskId) {
               item["商品名称"] ||
               "",
             price: isNaN(parsedPrice) ? 0 : parsedPrice,
-            quantity: Number(item.quantity || item.数量 || item["数量"]) || 1, // 默认1
-            unit: item.unit || item.单位 || item["单位"] || "盒", // 默认"盒"
-            supplier: item.supplier || item.供应商 || item["供应商"] || "", // 默认空
+            quantity: Number(item.quantity || item.数量 || item["数量"]) || 1,
+            unit: item.unit || item.单位 || item["单位"] || "盒",
+            supplier: item.supplier || item.供应商 || item["供应商"] || "",
             rawData: item,
           },
           metadata: {
             source: {
-              row: index + 2, // Excel行号（从2开始，1是标题）
+              row: index + 2,
               file: task.originalFilename,
             },
           },
         })
 
-        // 执行匹配
+        // 执行匹配 - 包含模板ID
         const candidates = await matchingEngine.match(
           record.originalData,
           products,
-          task.config
+          {
+            ...task.config,
+            templateId: task.templateId,
+          }
         )
 
-        logger.info("匹配完成", {
-          taskId,
-          原始名称: record.originalData.name,
-          候选项数量: candidates.length,
-          最佳分数: candidates[0]?.score.total || 0,
-        })
-
-        // 直接设置候选项数组（避免循环Promise调用）
-        record.candidates = candidates
+        // 确保候选商品包含完整的商品信息
+        record.candidates = candidates.map((candidate) => ({
+          ...candidate,
+          name:
+            candidate.name ||
+            products.find(
+              (p) => p._id.toString() === candidate.productId.toString()
+            )?.name,
+          brand:
+            candidate.brand ||
+            products.find(
+              (p) => p._id.toString() === candidate.productId.toString()
+            )?.brand,
+        }))
         await record.save()
 
-        // 根据最佳匹配分数决定状态
-        const bestScore = candidates[0]?.score.total || 0
+        // 自动确认逻辑 - 更激进
+        if (candidates.length > 0) {
+          const bestScore = candidates[0].score.total
+          const bestCandidate = candidates[0]
 
-        if (
-          bestScore >= task.config.autoConfirmThreshold &&
-          candidates.length > 0
-        ) {
-          // 自动确认
-          record.selectedMatch = {
-            productId: candidates[0].productId,
-            confidence: bestScore,
-            score: bestScore,
-            confirmedBy: task.createdBy,
-            confirmedAt: new Date(),
-            note: "系统自动确认",
-            matchType: "auto",
+          // 检查绑定冲突
+          const hasConflict = await hasProductBindingConflict(
+            bestCandidate.productId,
+            task._id,
+            record.originalData.name
+          )
+
+          // 更智能的自动确认条件 - 记忆匹配优先
+          const isHighTrustMemory =
+            bestCandidate.isMemoryMatch &&
+            bestCandidate.memorySource?.confirmCount >= 3 // 高信任记忆（确认3次以上）
+
+          const shouldAutoConfirm =
+            isHighTrustMemory || // 高信任记忆强制自动确认，忽略冲突
+            (!hasConflict &&
+              (bestCandidate.isMemoryMatch || // 普通记忆匹配直接确认
+                bestScore >= 95 || // 极高分自动确认
+                (bestScore >= 90 && candidates[0].confidence === "high"))) // 高分+高置信度
+
+          console.log(`🤖 自动确认判断:`, {
+            最佳候选: bestCandidate.isMemoryMatch ? "记忆匹配" : "常规匹配",
+            确认次数: bestCandidate.memorySource?.confirmCount || 0,
+            是否高信任记忆: isHighTrustMemory,
+            是否有冲突: hasConflict,
+            最佳分数: bestScore,
+            是否自动确认: shouldAutoConfirm,
+          })
+
+          if (shouldAutoConfirm) {
+            const matchType = bestCandidate.isMemoryMatch ? "memory" : "auto"
+            const note = bestCandidate.isMemoryMatch
+              ? `记忆匹配自动确认 (${
+                  bestCandidate.memorySource?.confirmCount || 0
+                }次历史确认)`
+              : "系统自动确认"
+
+            record.selectedMatch = {
+              productId: bestCandidate.productId,
+              name:
+                bestCandidate.name ||
+                products.find(
+                  (p) => p._id.toString() === bestCandidate.productId.toString()
+                )?.name,
+              brand:
+                bestCandidate.brand ||
+                products.find(
+                  (p) => p._id.toString() === bestCandidate.productId.toString()
+                )?.brand,
+              confidence: bestScore,
+              score: bestScore,
+              confirmedBy: task.createdBy,
+              confirmedAt: new Date(),
+              note: note,
+              matchType: matchType,
+              isMemoryMatch: bestCandidate.isMemoryMatch || false,
+            }
+            record.status = "confirmed"
+            // 注意：不要手动增加 confirmedItems，通过 updateProgress 自动计算
+            autoConfirmedCount++
+
+            await record.save()
+            await updateProductWholesalePrice(record, bestCandidate.productId)
+
+            // 自动确认也要学习到记忆库
+            try {
+              await MatchingMemory.learnFromMatch(
+                record.originalData.name,
+                bestCandidate.productId,
+                bestScore,
+                task.createdBy,
+                record._id,
+                task._id,
+                task.templateId,
+                {
+                  source: bestCandidate.isMemoryMatch ? "learned" : "auto",
+                  initialWeight: bestCandidate.isMemoryMatch ? 2.0 : 1.0,
+                  requiresConfirmation: false,
+                }
+              )
+              logger.info("自动确认记忆学习成功", {
+                recordId: record._id,
+                originalName: record.originalData.name,
+                productId: bestCandidate.productId,
+                matchType: matchType,
+                score: bestScore,
+              })
+            } catch (memoryError) {
+              logger.error("自动确认记忆学习失败", {
+                recordId: record._id,
+                error: memoryError.message,
+              })
+            }
+          } else if (bestScore >= 50) {
+            // 降低审核阈值，让更多记录进入人工管理
+            record.status = "pending"
+            // 注意：不要手动增加 pendingItems，它会自动计算
+
+            // 修复：为待审核状态设置预选匹配，让用户能看到系统推荐
+            record.selectedMatch = {
+              productId: bestCandidate.productId,
+              name:
+                bestCandidate.name ||
+                products.find(
+                  (p) => p._id.toString() === bestCandidate.productId.toString()
+                )?.name,
+              brand:
+                bestCandidate.brand ||
+                products.find(
+                  (p) => p._id.toString() === bestCandidate.productId.toString()
+                )?.brand,
+              confidence: bestScore,
+              score: bestScore,
+              matchType: bestCandidate.isMemoryMatch ? "memory" : "auto",
+              isMemoryMatch: bestCandidate.isMemoryMatch || false,
+              source: "system_suggestion", // 标记为系统建议，非用户确认
+            }
+
+            if (hasConflict) {
+              record.exceptions.push({
+                type: "duplicate_name",
+                message: "该商品已关联其他批发名，需人工确认",
+                severity: "low",
+                createdAt: new Date(),
+              })
+            }
+
+            // 高分匹配（≥85分）预先学习到记忆库，但权重较低
+            if (bestScore >= 85 && !hasConflict) {
+              try {
+                await MatchingMemory.learnFromMatch(
+                  record.originalData.name,
+                  bestCandidate.productId,
+                  bestScore,
+                  task.createdBy,
+                  record._id,
+                  task._id,
+                  task.templateId,
+                  {
+                    source: "auto", // 自动学习
+                    initialWeight: 0.8, // 预学习权重较低
+                    requiresConfirmation: true,
+                  }
+                )
+                logger.info("高分匹配预学习成功", {
+                  recordId: record._id,
+                  originalName: record.originalData.name,
+                  productId: bestCandidate.productId,
+                  score: bestScore,
+                })
+              } catch (memoryError) {
+                logger.error("高分匹配预学习失败", {
+                  recordId: record._id,
+                  error: memoryError.message,
+                })
+              }
+            }
+          } else {
+            record.status = "exception"
+            record.exceptions.push({
+              type: "low_confidence",
+              message: `匹配置信度过低 (${bestScore}%)`,
+              severity: "medium",
+              createdAt: new Date(),
+            })
+            // 注意：不要手动增加 exceptionItems，通过 updateProgress 自动计算
           }
-          record.status = "confirmed"
-          task.progress.confirmedItems++
 
-          // 保存记录后立即更新商品批发价
-          await record.save()
-          await updateProductWholesalePrice(record, candidates[0].productId)
-        } else if (
-          bestScore >= task.config.threshold &&
-          candidates.length > 0
-        ) {
-          // 需要人工审核
-          record.status = "reviewing"
-          task.progress.pendingItems++
+          if (record.status !== "confirmed") {
+            await record.save()
+          }
         } else {
-          // 低置信度，标记为异常
+          // 无候选项直接标记为异常，不进入审核队列
           record.status = "exception"
           record.exceptions.push({
-            type: "low_confidence",
-            message: `匹配置信度过低 (${bestScore}%)`,
-            severity: "medium",
+            type: "no_candidates",
+            message: "未找到匹配候选项",
+            severity: "high",
             createdAt: new Date(),
           })
-          task.progress.exceptionItems++
-        }
-
-        // 只有非自动确认的记录才需要在这里保存
-        if (record.status !== "confirmed") {
+          // 注意：不要手动增加 exceptionItems，通过 updateProgress 自动计算
           await record.save()
         }
 
         processedCount++
+
+        // 实时更新进度 - 每处理一个记录都更新 processedItems
         task.progress.processedItems = processedCount
 
-        // 每处理10条记录更新一次进度
-        if (processedCount % 10 === 0) {
+        // 每处理5个记录或达到重要里程碑时保存进度，确保实时性
+        if (
+          processedCount % 5 === 0 ||
+          processedCount === task.progress.totalItems
+        ) {
           await task.updateProgress(task.progress)
+          logger.info("实时进度更新", {
+            taskId,
+            processedCount,
+            totalItems: task.progress.totalItems,
+            progressPercentage: Math.round(
+              (processedCount / task.progress.totalItems) * 100
+            ),
+          })
         }
       } catch (error) {
         logger.error("处理匹配记录失败", {
@@ -835,29 +1151,39 @@ async function processMatchingTask(taskId) {
           index,
           error: error.message,
         })
-
-        task.progress.exceptionItems++
+        // 注意：不要手动增加 exceptionItems，通过 updateProgress 自动计算
       }
     }
 
-    // 5. 完成任务
-    task.statistics.processingTime.matching = Date.now() - matchingStart
+    // 6. 完成任务 - 重新统计所有状态数量，确保数据准确
+    const confirmed = await MatchingRecord.countDocuments({
+      taskId: task._id,
+      status: "confirmed",
+    })
+    const rejected = await MatchingRecord.countDocuments({
+      taskId: task._id,
+      status: "rejected",
+    })
+    const pending = await MatchingRecord.countDocuments({
+      taskId: task._id,
+      status: "pending",
+    })
+    const exception = await MatchingRecord.countDocuments({
+      taskId: task._id,
+      status: "exception",
+    })
+
+    // 重新设置进度数据
+    task.progress.confirmedItems = confirmed
+    task.progress.rejectedItems = rejected
+    task.progress.pendingItems = pending
+    task.progress.exceptionItems = exception
+    // processedItems 应该是所有已处理的记录，包括所有状态
+    task.progress.processedItems = confirmed + rejected + pending + exception
+
     await task.updateProgress(task.progress)
 
     // 计算统计信息
-    const avgScore = await MatchingRecord.aggregate([
-      { $match: { taskId: task._id } },
-      {
-        $group: {
-          _id: null,
-          avgScore: { $avg: { $arrayElemAt: ["$candidates.score.total", 0] } },
-        },
-      },
-    ])
-
-    task.statistics.averageConfidence = avgScore[0]?.avgScore || 0
-
-    // 计算匹配率（确认+待审核的比例）
     const totalProcessed = task.progress.processedItems
     const successfulMatches =
       task.progress.confirmedItems + task.progress.pendingItems
@@ -866,36 +1192,43 @@ async function processMatchingTask(taskId) {
         ? Math.round((successfulMatches / totalProcessed) * 100)
         : 0
 
-    logger.info("统计信息计算完成", {
-      taskId,
-      totalProcessed,
-      successfulMatches,
-      matchRate: task.statistics.matchRate,
-      averageConfidence: task.statistics.averageConfidence,
-    })
+    const autoConfirmRate =
+      totalProcessed > 0
+        ? Math.round((autoConfirmedCount / totalProcessed) * 100)
+        : 0
 
     await task.updateStatistics(task.statistics)
 
-    // 根据是否有待审核项目决定最终状态
-    if (task.progress.pendingItems > 0 || task.progress.exceptionItems > 0) {
-      task.status = "review"
-      await task.save() // 保存review状态
-      logger.info("任务进入审核状态", {
-        taskId,
-        pendingItems: task.progress.pendingItems,
-        exceptionItems: task.progress.exceptionItems,
-      })
+    // 最终进度计算 - 确保数据一致性
+    await updateTaskStatusAfterReview(taskId)
+    // 重新获取任务数据，因为updateTaskStatusAfterReview可能已经更新了进度
+    const updatedTask = await MatchingTask.findById(taskId)
+
+    // 更新任务状态
+    if (
+      updatedTask.progress.pendingItems > 0 ||
+      updatedTask.progress.exceptionItems > 0
+    ) {
+      updatedTask.status = "review"
+      await updatedTask.save()
     } else {
-      await task.complete()
-      logger.info("任务自动完成", { taskId })
+      await updatedTask.complete()
     }
 
     logger.info("匹配任务完成", {
       taskId,
-      totalItems: task.progress.totalItems,
-      confirmedItems: task.progress.confirmedItems,
-      pendingItems: task.progress.pendingItems,
-      exceptionItems: task.progress.exceptionItems,
+      totalItems: updatedTask.progress.totalItems,
+      confirmedItems: updatedTask.progress.confirmedItems,
+      pendingItems: updatedTask.progress.pendingItems,
+      exceptionItems: updatedTask.progress.exceptionItems,
+      processedItems: updatedTask.progress.processedItems, // 添加正确的处理项数量
+      realProgress: Math.round(
+        (updatedTask.progress.processedItems /
+          updatedTask.progress.totalItems) *
+          100
+      ), // 真实进度
+      matchRate: updatedTask.statistics.matchRate,
+      autoConfirmRate,
     })
   } catch (error) {
     logger.error("匹配任务执行失败", { taskId, error: error.message })
@@ -905,13 +1238,9 @@ async function processMatchingTask(taskId) {
     try {
       if (task?.filePath && fs.existsSync(task.filePath)) {
         fs.unlinkSync(task.filePath)
-        logger.info("临时文件已清理", { filePath: task.filePath })
       }
     } catch (cleanupError) {
-      logger.warn("清理临时文件失败", {
-        filePath: task?.filePath,
-        error: cleanupError.message,
-      })
+      logger.warn("清理临时文件失败", { error: cleanupError.message })
     }
   }
 }
@@ -922,46 +1251,24 @@ async function processMatchingTask(taskId) {
 async function parseUploadedFile(filePath, filename) {
   const fileExtension = path.extname(filename).toLowerCase()
 
-  logger.info("开始解析文件", {
-    filePath,
-    filename,
-    fileExtension,
-    fileExists: fs.existsSync(filePath),
-  })
-
   if (!fs.existsSync(filePath)) {
     throw new Error(`文件不存在: ${filePath}`)
   }
 
   try {
-    let result
     if (fileExtension === ".xlsx" || fileExtension === ".xls") {
-      result = parseExcelFile(filePath)
+      return parseExcelFile(filePath)
     } else if (fileExtension === ".csv") {
-      result = parseCSVFile(filePath)
+      return parseCSVFile(filePath)
     } else {
       throw new Error("不支持的文件格式")
     }
-
-    logger.info("文件解析成功", {
-      filePath,
-      解析条数: result?.length || 0,
-    })
-
-    return result
   } catch (error) {
-    logger.error("文件解析失败", {
-      filePath,
-      filename,
-      error: error.message,
-    })
+    logger.error("文件解析失败", { filePath, filename, error: error.message })
     throw error
   }
 }
 
-/**
- * 解析Excel文件
- */
 function parseExcelFile(filePath) {
   const workbook = xlsx.readFile(filePath)
   const sheetName = workbook.SheetNames[0]
@@ -969,9 +1276,6 @@ function parseExcelFile(filePath) {
   return xlsx.utils.sheet_to_json(worksheet)
 }
 
-/**
- * 解析CSV文件
- */
 function parseCSVFile(filePath) {
   return new Promise((resolve, reject) => {
     const results = []
@@ -984,8 +1288,42 @@ function parseCSVFile(filePath) {
 }
 
 /**
- * 获取匹配任务列表
+ * 更新商品的批发价信息
  */
+async function updateProductWholesalePrice(record, productId) {
+  try {
+    const originalPrice = record.originalData.price
+    const originalName = record.originalData.name
+
+    if (!originalPrice || originalPrice <= 0) return
+
+    const updateData = {
+      "wholesale.name": originalName,
+      "wholesale.price": originalPrice,
+      "wholesale.unit": record.originalData.unit || "元/条",
+      "wholesale.updatedAt": new Date(),
+      "wholesale.source": "matching",
+      "wholesale.lastMatchingRecord": record._id,
+    }
+
+    await Product.findByIdAndUpdate(productId, updateData, { new: true })
+
+    logger.info("商品批发价更新成功", {
+      productId,
+      recordId: record._id,
+      originalName,
+      originalPrice,
+    })
+  } catch (error) {
+    logger.error("更新商品批发价失败", {
+      recordId: record._id,
+      productId,
+      error: error.message,
+    })
+  }
+}
+
+// 其他控制器方法保持不变，只导入必要的方法
 const getMatchingTasks = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, status, priority } = req.query
 
@@ -1017,9 +1355,6 @@ const getMatchingTasks = asyncHandler(async (req, res) => {
   })
 })
 
-/**
- * 获取匹配任务详情
- */
 const getMatchingTaskById = asyncHandler(async (req, res) => {
   const { id } = req.params
 
@@ -1031,7 +1366,6 @@ const getMatchingTaskById = asyncHandler(async (req, res) => {
     throw new NotFoundError("匹配任务")
   }
 
-  // 获取匹配记录统计
   const recordStats = await MatchingRecord.getMatchingStatistics(id)
 
   res.json({
@@ -1043,9 +1377,6 @@ const getMatchingTaskById = asyncHandler(async (req, res) => {
   })
 })
 
-/**
- * 获取待审核的匹配记录
- */
 const getPendingReviews = asyncHandler(async (req, res) => {
   const {
     taskId,
@@ -1060,9 +1391,14 @@ const getPendingReviews = asyncHandler(async (req, res) => {
   if (priority) filters.priority = priority
 
   const [records, total] = await Promise.all([
-    MatchingRecord.getPendingReviews(filters, parseInt(limit), sortBy),
+    MatchingRecord.getPendingReviews(
+      filters,
+      parseInt(limit),
+      sortBy,
+      parseInt(page)
+    ),
     MatchingRecord.countDocuments({
-      status: { $in: ["reviewing", "exception"] },
+      status: { $in: ["pending", "exception"] },
       ...filters,
     }),
   ])
@@ -1081,15 +1417,22 @@ const getPendingReviews = asyncHandler(async (req, res) => {
   })
 })
 
-/**
- * 获取所有匹配记录（包括已确认、已拒绝等）
- */
 const getAllMatchingRecords = asyncHandler(async (req, res) => {
   const { taskId, page = 1, limit = 20, status } = req.query
+
+  console.log("🔍 getAllMatchingRecords 请求参数:", {
+    taskId,
+    page,
+    limit,
+    status,
+    query: req.query,
+  })
 
   const filters = {}
   if (taskId) filters.taskId = taskId
   if (status) filters.status = status
+
+  console.log("🔍 数据库查询 filters:", filters)
 
   const [records, total] = await Promise.all([
     MatchingRecord.find(filters)
@@ -1108,6 +1451,20 @@ const getAllMatchingRecords = asyncHandler(async (req, res) => {
     MatchingRecord.countDocuments(filters),
   ])
 
+  console.log("🔍 数据库查询结果:", {
+    recordsLength: records.length,
+    total: total,
+    page: parseInt(page),
+    limit: parseInt(limit),
+    calculatedPages: Math.ceil(total / parseInt(limit)),
+  })
+
+  // 验证是否有数据被意外过滤
+  const allRecordsForTask = await MatchingRecord.find({
+    taskId,
+  }).countDocuments()
+  console.log("🔍 该taskId下的总记录数:", allRecordsForTask)
+
   res.json({
     success: true,
     data: {
@@ -1122,9 +1479,6 @@ const getAllMatchingRecords = asyncHandler(async (req, res) => {
   })
 })
 
-/**
- * 审核匹配记录
- */
 const reviewMatchingRecord = asyncHandler(async (req, res) => {
   const { id } = req.params
   const { action, productId, note } = req.body
@@ -1135,7 +1489,7 @@ const reviewMatchingRecord = asyncHandler(async (req, res) => {
   }
 
   if (
-    !["reviewing", "confirmed", "rejected", "exception"].includes(record.status)
+    !["pending", "confirmed", "rejected", "exception"].includes(record.status)
   ) {
     throw new BusinessError(`记录状态不允许修改，当前状态: ${record.status}`)
   }
@@ -1143,48 +1497,281 @@ const reviewMatchingRecord = asyncHandler(async (req, res) => {
   let result
 
   if (action === "confirm" && productId) {
-    result = await record.confirmMatch(productId, req.user._id, note, "manual")
+    // 记录旧的匹配商品ID（如果有）
+    const oldProductId = record.selectedMatch?.productId
 
-    // 更新商品的批发价信息
+    result = await record.confirmMatch(productId, req.user._id, note, "manual")
     await updateProductWholesalePrice(record, productId)
+
+    // 获取任务信息以获取templateId
+    const MatchingTask = require("../models/MatchingTask")
+    const task = await MatchingTask.findById(record.taskId)
+    const templateId = task?.templateId
+
+    // 双向同步：处理匹配更改或新匹配学习
+    try {
+      if (oldProductId && oldProductId.toString() !== productId) {
+        // 用户更改了匹配商品，处理匹配更改
+        await MatchingMemory.handleMatchChange(
+          record.originalData.name,
+          oldProductId,
+          productId,
+          record.selectedMatch?.confidence || 100,
+          req.user._id,
+          record._id,
+          record.taskId,
+          templateId
+        )
+
+        logger.info("记忆库同步成功：处理匹配更改", {
+          recordId: record._id,
+          originalName: record.originalData.name,
+          oldProductId,
+          newProductId: productId,
+        })
+      } else {
+        // 新的匹配确认，正常学习
+        await MatchingMemory.learnFromMatch(
+          record.originalData.name,
+          productId,
+          record.selectedMatch?.confidence || 100,
+          req.user._id,
+          record._id,
+          record.taskId,
+          templateId,
+          {
+            source: "manual",
+            initialWeight: 1.5,
+            requiresConfirmation: false,
+          }
+        )
+
+        logger.info("记忆库学习成功", {
+          recordId: record._id,
+          originalName: record.originalData.name,
+          productId,
+        })
+      }
+    } catch (memoryError) {
+      logger.error("记忆库同步失败", {
+        recordId: record._id,
+        error: memoryError.message,
+      })
+      // 不影响主流程，继续执行
+    }
   } else if (action === "reject") {
     result = await record.rejectMatch(req.user._id, note)
+
+    // 双向同步：处理记忆库中被拒绝的匹配
+    if (record.selectedMatch?.productId) {
+      try {
+        await MatchingMemory.handleRejectedMatch(
+          record.originalData.name,
+          record.selectedMatch.productId,
+          req.user._id,
+          record._id,
+          record.taskId
+        )
+
+        logger.info("记忆库同步成功：处理拒绝匹配", {
+          recordId: record._id,
+          originalName: record.originalData.name,
+          rejectedProductId: record.selectedMatch.productId,
+        })
+      } catch (memoryError) {
+        logger.error("记忆库同步失败：处理拒绝匹配", {
+          recordId: record._id,
+          error: memoryError.message,
+        })
+        // 不影响主流程，继续执行
+      }
+    }
+  } else if (action === "clear") {
+    result = await record.clearMatch(req.user._id, note)
   } else {
     throw new BusinessError("无效的审核操作")
   }
 
-  // 记录用户行为用于学习
   await record.recordUserBehavior(req.user._id, action, {
     productId,
     note,
     timestamp: new Date(),
   })
 
-  // 检查任务是否所有审核都已完成，并更新任务状态
   await updateTaskStatusAfterReview(record.taskId)
 
-  // 记录操作日志
   logOperation("审核匹配记录", req.user, {
     recordId: record._id,
     action,
     productId,
   })
 
+  const actionMessages = {
+    confirm: "确认",
+    reject: "拒绝",
+    clear: "清空匹配",
+  }
+
   res.json({
     success: true,
-    message: `${action === "confirm" ? "确认" : "拒绝"}成功`,
+    message: `${actionMessages[action] || action}成功`,
     data: { record: result },
   })
 })
 
 /**
- * 修改匹配记录的原始名称
+ * 手动学习匹配记录到记忆库
  */
+const learnToMemory = asyncHandler(async (req, res) => {
+  const { id } = req.params
+  const { note, confidence } = req.body
+
+  const record = await MatchingRecord.findById(id)
+  if (!record) {
+    throw new NotFoundError("匹配记录")
+  }
+
+  if (!record.selectedMatch?.productId) {
+    throw new BusinessError("该记录没有匹配的商品，无法学习到记忆库")
+  }
+
+  // 获取任务信息以获取templateId
+  const MatchingTask = require("../models/MatchingTask")
+  const task = await MatchingTask.findById(record.taskId)
+  const templateId = task?.templateId
+
+  try {
+    await MatchingMemory.learnFromMatch(
+      record.originalData.name,
+      record.selectedMatch.productId,
+      confidence || record.selectedMatch.confidence || 100,
+      req.user._id,
+      record._id,
+      record.taskId,
+      templateId,
+      {
+        source: "manual",
+        initialWeight: 2.0, // 手动学习权重较高
+        requiresConfirmation: false,
+      }
+    )
+
+    logOperation("手动学习记忆", req.user, {
+      recordId: record._id,
+      originalName: record.originalData.name,
+      productId: record.selectedMatch.productId,
+      note,
+    })
+
+    res.json({
+      success: true,
+      message: "已成功学习到记忆库",
+      data: { recordId: record._id },
+    })
+  } catch (error) {
+    logger.error("手动学习记忆失败", {
+      recordId: record._id,
+      error: error.message,
+    })
+
+    if (error.code === 11000) {
+      res.json({
+        success: true,
+        message: "该匹配已存在于记忆库中",
+        data: { recordId: record._id },
+      })
+    } else {
+      throw new BusinessError("学习到记忆库失败")
+    }
+  }
+})
+
+/**
+ * 批量学习到记忆库
+ */
+const batchLearnToMemory = asyncHandler(async (req, res) => {
+  const { recordIds, note } = req.body
+
+  if (!recordIds || !Array.isArray(recordIds) || recordIds.length === 0) {
+    throw new BusinessError("请提供要学习的记录ID列表")
+  }
+
+  const results = {
+    success: [],
+    failed: [],
+    total: recordIds.length,
+  }
+
+  for (const recordId of recordIds) {
+    try {
+      const record = await MatchingRecord.findById(recordId)
+
+      if (!record) {
+        results.failed.push({ recordId, error: "记录不存在" })
+        continue
+      }
+
+      if (!record.selectedMatch?.productId) {
+        results.failed.push({ recordId, error: "没有匹配的商品" })
+        continue
+      }
+
+      // 获取任务信息
+      const MatchingTask = require("../models/MatchingTask")
+      const task = await MatchingTask.findById(record.taskId)
+      const templateId = task?.templateId
+
+      await MatchingMemory.learnFromMatch(
+        record.originalData.name,
+        record.selectedMatch.productId,
+        record.selectedMatch.confidence || 100,
+        req.user._id,
+        record._id,
+        record.taskId,
+        templateId,
+        {
+          source: "manual",
+          initialWeight: 2.0,
+          requiresConfirmation: false,
+        }
+      )
+
+      results.success.push({
+        recordId,
+        originalName: record.originalData.name,
+      })
+    } catch (error) {
+      logger.error("批量学习记忆失败", { recordId, error: error.message })
+
+      if (error.code === 11000) {
+        results.success.push({
+          recordId,
+          note: "已存在于记忆库",
+        })
+      } else {
+        results.failed.push({ recordId, error: error.message })
+      }
+    }
+  }
+
+  logOperation("批量学习记忆", req.user, {
+    totalRecords: results.total,
+    successCount: results.success.length,
+    failedCount: results.failed.length,
+    note,
+  })
+
+  res.json({
+    success: true,
+    message: `批量学习完成，成功 ${results.success.length} 条，失败 ${results.failed.length} 条`,
+    data: results,
+  })
+})
+
 const updateOriginalName = asyncHandler(async (req, res) => {
   const { id } = req.params
   const { originalName } = req.body
 
-  // 验证输入
   if (
     !originalName ||
     typeof originalName !== "string" ||
@@ -1198,17 +1785,14 @@ const updateOriginalName = asyncHandler(async (req, res) => {
     throw new NotFoundError("匹配记录")
   }
 
-  // 保存旧的名称用于日志
   const oldName = record.originalData.name
 
-  // 更新原始名称
   record.originalData.name = originalName.trim()
   record.metadata.lastModified = new Date()
   record.metadata.modifiedBy = req.user._id
 
   await record.save()
 
-  // 记录操作日志
   logOperation("修改原始名称", req.user, {
     recordId: record._id,
     taskId: record.taskId,
@@ -1219,15 +1803,10 @@ const updateOriginalName = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message: "原始名称更新成功",
-    data: {
-      record,
-    },
+    data: { record },
   })
 })
 
-/**
- * 批量审核匹配记录
- */
 const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
   const { recordIds, action, productIds, note } = req.body
 
@@ -1239,7 +1818,6 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
     throw new BusinessError("无效的审核操作")
   }
 
-  // 对于确认操作，需要productIds数组
   if (action === "confirm" && (!productIds || !Array.isArray(productIds))) {
     throw new BusinessError("确认操作需要提供对应的产品ID列表")
   }
@@ -1250,7 +1828,6 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
     total: recordIds.length,
   }
 
-  // 批量处理记录
   for (let i = 0; i < recordIds.length; i++) {
     const recordId = recordIds[i]
 
@@ -1258,19 +1835,12 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
       const record = await MatchingRecord.findById(recordId)
 
       if (!record) {
-        results.failed.push({
-          recordId,
-          error: "记录不存在",
-        })
+        results.failed.push({ recordId, error: "记录不存在" })
         continue
       }
 
-      // 允许对 "reviewing" 和 "exception" 状态进行批量审核
-      if (record.status !== "reviewing" && record.status !== "exception") {
-        results.failed.push({
-          recordId,
-          error: "记录状态不允许审核",
-        })
+      if (record.status !== "pending" && record.status !== "exception") {
+        results.failed.push({ recordId, error: "记录状态不允许审核" })
         continue
       }
 
@@ -1278,26 +1848,87 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
       if (action === "confirm") {
         const productId = productIds[i]
         if (!productId) {
-          results.failed.push({
-            recordId,
-            error: "缺少产品ID",
-          })
+          results.failed.push({ recordId, error: "缺少产品ID" })
           continue
         }
+
+        // 记录旧的匹配商品ID（如果有）
+        const oldProductId = record.selectedMatch?.productId
+
         result = await record.confirmMatch(
           productId,
           req.user._id,
           note || "批量确认",
           "manual"
         )
-
-        // 更新商品的批发价信息
         await updateProductWholesalePrice(record, productId)
+
+        // 双向同步：批量确认记忆学习
+        try {
+          // 获取任务信息以获取templateId
+          const MatchingTask = require("../models/MatchingTask")
+          const task = await MatchingTask.findById(record.taskId)
+          const templateId = task?.templateId
+
+          if (oldProductId && oldProductId.toString() !== productId) {
+            // 用户更改了匹配商品，处理匹配更改
+            await MatchingMemory.handleMatchChange(
+              record.originalData.name,
+              oldProductId,
+              productId,
+              record.selectedMatch?.confidence || 100,
+              req.user._id,
+              record._id,
+              record.taskId,
+              templateId
+            )
+          } else {
+            // 新的匹配确认，正常学习
+            await MatchingMemory.learnFromMatch(
+              record.originalData.name,
+              productId,
+              record.selectedMatch?.confidence || 100,
+              req.user._id,
+              record._id,
+              record.taskId,
+              templateId,
+              {
+                source: "manual",
+                initialWeight: 1.5,
+                requiresConfirmation: false,
+              }
+            )
+          }
+        } catch (memoryError) {
+          logger.error("批量记忆库同步失败", {
+            recordId: record._id,
+            error: memoryError.message,
+          })
+          // 不影响主流程，继续执行
+        }
       } else {
         result = await record.rejectMatch(req.user._id, note || "批量拒绝")
+
+        // 双向同步：处理记忆库中被拒绝的匹配
+        if (record.selectedMatch?.productId) {
+          try {
+            await MatchingMemory.handleRejectedMatch(
+              record.originalData.name,
+              record.selectedMatch.productId,
+              req.user._id,
+              record._id,
+              record.taskId
+            )
+          } catch (memoryError) {
+            logger.error("批量拒绝记忆库同步失败", {
+              recordId: record._id,
+              error: memoryError.message,
+            })
+            // 不影响主流程，继续执行
+          }
+        }
       }
 
-      // 记录用户行为
       await record.recordUserBehavior(req.user._id, action, {
         productId: action === "confirm" ? productIds[i] : null,
         note: note || `批量${action === "confirm" ? "确认" : "拒绝"}`,
@@ -1310,19 +1941,11 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
         originalName: record.originalData.name,
       })
     } catch (error) {
-      logger.error("批量审核单个记录失败", {
-        recordId,
-        error: error.message,
-      })
-
-      results.failed.push({
-        recordId,
-        error: error.message,
-      })
+      logger.error("批量审核单个记录失败", { recordId, error: error.message })
+      results.failed.push({ recordId, error: error.message })
     }
   }
 
-  // 如果有成功的记录，更新任务状态
   if (results.success.length > 0) {
     const taskIds = await MatchingRecord.find({
       _id: { $in: recordIds },
@@ -1333,20 +1956,11 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
     }
   }
 
-  // 记录操作日志
   logOperation("批量审核匹配记录", req.user, {
     action,
     totalRecords: results.total,
     successCount: results.success.length,
     failedCount: results.failed.length,
-  })
-
-  logger.info("批量审核完成", {
-    action,
-    total: results.total,
-    success: results.success.length,
-    failed: results.failed.length,
-    userId: req.user._id,
   })
 
   res.json({
@@ -1356,9 +1970,6 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
   })
 })
 
-/**
- * 删除匹配任务
- */
 const deleteMatchingTask = asyncHandler(async (req, res) => {
   const { id } = req.params
 
@@ -1367,27 +1978,16 @@ const deleteMatchingTask = asyncHandler(async (req, res) => {
     throw new NotFoundError("匹配任务")
   }
 
-  // 检查权限：只能删除自己创建的任务
   if (task.createdBy.toString() !== req.user._id.toString()) {
     throw new BusinessError("无权删除此任务")
   }
 
-  // 删除相关的匹配记录
   await MatchingRecord.deleteMany({ taskId: id })
-
-  // 删除任务
   await MatchingTask.findByIdAndDelete(id)
 
-  // 记录操作日志
   logOperation("删除匹配任务", req.user, {
     taskId: id,
     filename: task.originalFilename,
-  })
-
-  logger.info("匹配任务删除成功", {
-    taskId: id,
-    filename: task.originalFilename,
-    userId: req.user._id,
   })
 
   res.json({
@@ -1396,20 +1996,11 @@ const deleteMatchingTask = asyncHandler(async (req, res) => {
   })
 })
 
-/**
- * 审核完成后更新任务状态
- */
 async function updateTaskStatusAfterReview(taskId) {
   try {
-    logger.info("开始更新任务状态", { taskId })
-
     const task = await MatchingTask.findById(taskId)
-    if (!task) {
-      logger.warn("任务不存在", { taskId })
-      return
-    }
+    if (!task) return
 
-    // 获取该任务的所有记录统计
     const recordStats = await MatchingRecord.aggregate([
       { $match: { taskId: new mongoose.Types.ObjectId(taskId) } },
       {
@@ -1422,8 +2013,8 @@ async function updateTaskStatusAfterReview(taskId) {
           rejected: {
             $sum: { $cond: [{ $eq: ["$status", "rejected"] }, 1, 0] },
           },
-          reviewing: {
-            $sum: { $cond: [{ $eq: ["$status", "reviewing"] }, 1, 0] },
+          pending: {
+            $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
           },
           exception: {
             $sum: { $cond: [{ $eq: ["$status", "exception"] }, 1, 0] },
@@ -1432,32 +2023,16 @@ async function updateTaskStatusAfterReview(taskId) {
       },
     ])
 
-    if (recordStats.length === 0) {
-      logger.warn("没有找到记录统计", { taskId })
-      return
-    }
+    if (recordStats.length === 0) return
 
     const stats = recordStats[0]
 
-    logger.info("获取到记录统计", {
-      taskId,
-      stats: {
-        total: stats.total,
-        confirmed: stats.confirmed,
-        rejected: stats.rejected,
-        reviewing: stats.reviewing,
-        exception: stats.exception,
-      },
-    })
-
-    // 更新任务的进度统计
     task.progress.confirmedItems = stats.confirmed
     task.progress.rejectedItems = stats.rejected
-    task.progress.pendingItems = stats.reviewing
+    task.progress.pendingItems = stats.pending
     task.progress.exceptionItems = stats.exception
-    task.progress.processedItems = stats.total
+    task.progress.processedItems = stats.confirmed + stats.rejected // 只计算已处理的记录
 
-    // 重新计算匹配率
     const successfulMatches = stats.confirmed
     const totalProcessed = stats.total
     task.statistics.matchRate =
@@ -1465,48 +2040,20 @@ async function updateTaskStatusAfterReview(taskId) {
         ? Math.round((successfulMatches / totalProcessed) * 100)
         : 0
 
-    logger.info("更新任务统计完成", {
-      taskId,
-      matchRate: task.statistics.matchRate,
-      progress: task.progress,
-    })
-
-    // 检查是否所有审核都已完成（只考虑reviewing状态，exception不阻止完成）
-    const pendingCount = stats.reviewing
+    const pendingCount = stats.pending
     if (pendingCount === 0) {
-      // 所有审核已完成，更新任务状态
       task.status = "completed"
       task.completedAt = new Date()
-
-      logger.info("匹配任务审核全部完成", {
-        taskId,
-        confirmedItems: stats.confirmed,
-        rejectedItems: stats.rejected,
-        exceptionItems: stats.exception,
-        matchRate: task.statistics.matchRate,
-      })
     } else {
-      // 仍有待审核项目
       task.status = "review"
-      logger.info("匹配任务仍有待审核项目", {
-        taskId,
-        pendingCount: stats.reviewing,
-        exceptionCount: stats.exception,
-      })
     }
 
     await task.save()
   } catch (error) {
-    logger.error("更新任务状态失败", {
-      taskId,
-      error: error.message,
-    })
+    logger.error("更新任务状态失败", { taskId, error: error.message })
   }
 }
 
-/**
- * 手动更新任务状态
- */
 const updateTaskStatus = asyncHandler(async (req, res) => {
   const { id } = req.params
 
@@ -1515,19 +2062,8 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
     throw new NotFoundError("匹配任务")
   }
 
-  // 更新任务状态
   await updateTaskStatusAfterReview(id)
-
-  // 获取更新后的任务信息
   const updatedTask = await MatchingTask.findById(id)
-
-  logger.info("手动更新任务状态", {
-    taskId: id,
-    oldStatus: task.status,
-    newStatus: updatedTask.status,
-    matchRate: updatedTask.statistics.matchRate,
-    userId: req.user._id,
-  })
 
   res.json({
     success: true,
@@ -1536,9 +2072,6 @@ const updateTaskStatus = asyncHandler(async (req, res) => {
   })
 })
 
-/**
- * 导出匹配结果为Excel
- */
 const exportMatchingResults = asyncHandler(async (req, res) => {
   const { taskId } = req.params
   const { format = "excel", sortBy = "confidence_desc" } = req.query
@@ -1548,7 +2081,6 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
     throw new NotFoundError("匹配任务")
   }
 
-  // 获取所有匹配记录
   const records = await MatchingRecord.find({ taskId })
     .populate(
       "selectedMatch.productId",
@@ -1562,11 +2094,8 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
 
   const Excel = require("exceljs")
   const workbook = new Excel.Workbook()
-
-  // 创建主工作表
   const worksheet = workbook.addWorksheet("匹配结果")
 
-  // 设置列定义 - 按照用户要求的顺序：商品名称、盒码、条码、公司价、品牌、批发名、批发价
   worksheet.columns = [
     { header: "商品名称", key: "matchedName", width: 25 },
     { header: "盒码", key: "boxCode", width: 15 },
@@ -1577,7 +2106,6 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
     { header: "批发价", key: "originalPrice", width: 12 },
   ]
 
-  // 样式定义
   const headerRow = worksheet.getRow(1)
   headerRow.font = { bold: true, color: { argb: "FFFFFF" } }
   headerRow.fill = {
@@ -1587,12 +2115,10 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
   }
   headerRow.alignment = { horizontal: "center" }
 
-  // 只导出已确认且有匹配商品的记录
   let exportable = records.filter(
     (r) => r.status === "confirmed" && r.selectedMatch?.productId
   )
 
-  // 根据 sortBy 排序
   const getCompanyPrice = (r) =>
     r.selectedMatch?.productId?.pricing?.companyPrice ||
     r.selectedMatch?.productId?.pricing?.retailPrice ||
@@ -1627,14 +2153,11 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
       break
   }
 
-  // 添加数据行
   exportable.forEach((record) => {
     worksheet.addRow({
       matchedName: record.selectedMatch?.productId?.name || "",
       boxCode: record.selectedMatch?.productId?.boxCode || "",
-      // 条码为产品编码 productCode
       barcode: record.selectedMatch?.productId?.productCode || "",
-      // 公司价读取 pricing.companyPrice，若无则回退到零售价
       companyPrice:
         record.selectedMatch?.productId?.pricing?.companyPrice ||
         record.selectedMatch?.productId?.pricing?.retailPrice ||
@@ -1645,18 +2168,17 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
     })
   })
 
-  // 设置列宽自适应
   worksheet.columns.forEach((column) => {
     column.width = Math.max(column.width || 10, 10)
   })
 
-  // 设置响应头
   const baseFilename = task.originalFilename
-    ? path.parse(task.originalFilename).name // 去掉扩展名
+    ? path.parse(task.originalFilename).name
     : "结果"
   const filename = `匹配结果_${baseFilename}_${new Date()
     .toISOString()
     .slice(0, 10)}.xlsx`
+
   res.setHeader(
     "Content-Type",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1666,81 +2188,17 @@ const exportMatchingResults = asyncHandler(async (req, res) => {
     `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
   )
 
-  // 输出Excel文件
   await workbook.xlsx.write(res)
 
-  // 计算导出的记录数（只包含已确认的记录）
-  const exportedRecords = exportable
-
-  // 记录操作日志
   logOperation("导出匹配结果", req.user, {
     taskId,
-    recordCount: exportedRecords.length,
+    recordCount: exportable.length,
     format: "excel",
-  })
-
-  logger.info("导出匹配结果完成", {
-    taskId,
-    recordCount: exportedRecords.length,
-    totalRecords: records.length,
-    filename,
-    userId: req.user._id,
   })
 })
 
-/**
- * 更新商品的批发价信息
- */
-async function updateProductWholesalePrice(record, productId) {
-  try {
-    // 获取原始批发价格
-    const originalPrice = record.originalData.price
-    const originalName = record.originalData.name
-
-    if (!originalPrice || originalPrice <= 0) {
-      logger.warn("批发价格无效，跳过更新", {
-        recordId: record._id,
-        productId,
-        originalPrice,
-      })
-      return
-    }
-
-    // 更新商品的批发价信息
-    const updateData = {
-      "wholesale.name": originalName,
-      "wholesale.price": originalPrice,
-      "wholesale.unit": record.originalData.unit || "元/条",
-      "wholesale.updatedAt": new Date(),
-      "wholesale.source": "matching",
-      "wholesale.lastMatchingRecord": record._id,
-    }
-
-    await Product.findByIdAndUpdate(productId, updateData, { new: true })
-
-    logger.info("商品批发价更新成功", {
-      productId,
-      recordId: record._id,
-      originalName,
-      originalPrice,
-      updatedAt: new Date(),
-    })
-  } catch (error) {
-    logger.error("更新商品批发价失败", {
-      recordId: record._id,
-      productId,
-      error: error.message,
-    })
-    // 不抛出错误，避免影响主流程
-  }
-}
-
-/**
- * 获取所有匹配成功的商品
- */
 const getMatchedProducts = asyncHandler(async (req, res) => {
   try {
-    // 获取所有已确认的匹配记录
     const records = await MatchingRecord.find({
       status: "confirmed",
       "selectedMatch.productId": { $exists: true },
@@ -1760,7 +2218,6 @@ const getMatchedProducts = asyncHandler(async (req, res) => {
       })
     }
 
-    // 处理数据格式
     const matchedProducts = records.map((record) => {
       const reviewTime =
         record.reviewHistory.length > 0
@@ -1799,19 +2256,13 @@ const getMatchedProducts = asyncHandler(async (req, res) => {
           createdAt: record.taskId.createdAt,
         },
         confirmedAt: reviewTime,
-        priceGap: originalPrice - companyPrice, // 价格差异
-        totalValue: quantity * companyPrice, // 总价值
+        priceGap: originalPrice - companyPrice,
+        totalValue: quantity * companyPrice,
       }
     })
 
-    // 记录操作日志
     logOperation("查看匹配商品清单", req.user, {
       totalRecords: matchedProducts.length,
-    })
-
-    logger.info("获取匹配商品清单", {
-      totalRecords: matchedProducts.length,
-      userId: req.user._id,
     })
 
     res.json({
@@ -1844,4 +2295,7 @@ module.exports = {
   updateTaskStatus,
   exportMatchingResults,
   getMatchedProducts,
+  learnToMemory,
+  batchLearnToMemory,
+  hasProductBindingConflict, // 添加冲突检查函数导出
 }

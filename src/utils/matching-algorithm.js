@@ -1,9 +1,10 @@
 /**
- * 智能匹配算法核心引擎
+ * 智能匹配算法核心引擎 - 集成记忆功能
  */
 const fuzzy = require("fuzzy")
 const { logger, logMatching } = require("./logger")
 const Product = require("../models/Product")
+const MatchingMemory = require("../models/MatchingMemory")
 const config = require("../config/env")
 
 class SmartMatchingEngine {
@@ -169,6 +170,36 @@ class SmartMatchingEngine {
   async findCandidates(wholesaleItem, productArchive, options = {}) {
     const { name } = wholesaleItem
     const candidates = []
+    const normalizedName = this.normalizeText(name)
+
+    // 0. 匹配记忆优先策略 - 新增
+    if (options.useMemory !== false) {
+      const memoryMatches = await this.findMemoryMatches(normalizedName)
+      if (memoryMatches.length > 0) {
+        logger.info(
+          `找到 ${memoryMatches.length} 个记忆匹配项，原始名称: ${name}`
+        )
+
+        // 从记忆中获取推荐产品
+        const memoryProducts = memoryMatches
+          .map((memory) => {
+            const product = productArchive.find(
+              (p) =>
+                p._id.toString() === memory.confirmedProductId._id.toString()
+            )
+            if (product) {
+              // 给记忆匹配的产品添加额外标记和分数加成
+              product._memoryScore = memory.trustScore
+              product._memorySource = memory
+              product._isMemoryMatch = true
+            }
+            return product
+          })
+          .filter(Boolean)
+
+        candidates.push(...memoryProducts)
+      }
+    }
 
     // 1. 品牌匹配优先策略
     if (options.brandPriority !== false) {
@@ -240,19 +271,36 @@ class SmartMatchingEngine {
       product.specifications?.packageType
     )
 
-    // 计算总分 - 移除价格权重
-    const total =
+    // 计算基础总分
+    let total =
       nameScore * this.weights.name +
       brandScore * this.weights.brand +
       keywordScore * this.weights.keywords +
       packageScore * this.weights.package
+
+    // 记忆加成 - 新增
+    let memoryBonus = 0
+    if (product._isMemoryMatch && product._memoryScore) {
+      // 根据记忆可信度给予加成，最高20分
+      memoryBonus = Math.min(20, (product._memoryScore / 100) * 20)
+      total += memoryBonus
+
+      logger.debug(
+        `记忆匹配加成: ${memoryBonus}, 记忆分数: ${product._memoryScore}`
+      )
+    }
+
+    // 确保总分不超过100
+    total = Math.min(100, total)
 
     return {
       name: Math.round(nameScore * 100) / 100,
       brand: Math.round(brandScore * 100) / 100,
       keywords: Math.round(keywordScore * 100) / 100,
       package: Math.round(packageScore * 100) / 100,
+      memoryBonus: Math.round(memoryBonus * 100) / 100,
       total: Math.round(total * 100) / 100,
+      isMemoryMatch: product._isMemoryMatch || false,
     }
   }
 
@@ -572,6 +620,108 @@ class SmartMatchingEngine {
   }
 
   /**
+   * 查找匹配记忆
+   * @param {String} normalizedName 标准化的批发名
+   * @returns {Array} 匹配的记忆列表
+   */
+  async findMemoryMatches(normalizedName) {
+    try {
+      // 精确匹配
+      const exactMatches = await MatchingMemory.findMatching(normalizedName, {
+        limit: 3,
+        minConfidence: 80,
+      })
+
+      if (exactMatches.length > 0) {
+        return exactMatches
+      }
+
+      // 模糊匹配 - 查找相似的批发名
+      const similarMatches = await MatchingMemory.find({
+        status: "active",
+        normalizedWholesaleName: {
+          $regex: normalizedName.slice(0, -2),
+          $options: "i",
+        },
+      })
+        .populate(
+          "confirmedProductId",
+          "name brand company productCode boxCode pricing"
+        )
+        .sort({ weight: -1, confirmCount: -1 })
+        .limit(5)
+        .lean()
+
+      // 过滤相似度较高的记忆
+      const filteredMatches = similarMatches.filter((memory) => {
+        const similarity = this.calculateStringSimilarity(
+          normalizedName,
+          memory.normalizedWholesaleName
+        )
+        return similarity >= 0.7 // 70%以上相似度
+      })
+
+      return filteredMatches
+    } catch (error) {
+      logger.error("查找匹配记忆失败:", error)
+      return []
+    }
+  }
+
+  /**
+   * 从匹配结果中学习并保存记忆
+   * @param {String} originalName 原始批发名
+   * @param {String} productId 确认的商品ID
+   * @param {Number} confidence 置信度
+   * @param {String} userId 用户ID
+   * @param {String} recordId 匹配记录ID
+   * @param {String} taskId 任务ID
+   */
+  async learnFromMatch(
+    originalName,
+    productId,
+    confidence,
+    userId,
+    recordId,
+    taskId
+  ) {
+    try {
+      await MatchingMemory.learnFromMatch(
+        originalName,
+        productId,
+        confidence,
+        userId,
+        recordId,
+        taskId
+      )
+
+      logger.info("匹配学习完成", {
+        originalName,
+        productId,
+        confidence,
+        userId,
+      })
+    } catch (error) {
+      logger.error("匹配学习失败:", error)
+    }
+  }
+
+  /**
+   * 计算字符串相似度
+   * @param {String} str1 字符串1
+   * @param {String} str2 字符串2
+   * @returns {Number} 相似度 0-1
+   */
+  calculateStringSimilarity(str1, str2) {
+    if (!str1 || !str2) return 0
+    if (str1 === str2) return 1
+
+    const distance = this.levenshteinDistance(str1, str2)
+    const maxLength = Math.max(str1.length, str2.length)
+    return (maxLength - distance) / maxLength
+  }
+
+  /**
    * 文本标准化
    */
   normalizeText(text) {
@@ -614,6 +764,16 @@ class SmartMatchingEngine {
 
     return matrix[str2.length][str1.length]
   }
+}
+
+// 导出文本标准化函数，供其他模块使用
+SmartMatchingEngine.normalizeText = function (text) {
+  if (!text) return ""
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[^\u4e00-\u9fa5a-z0-9]/g, "")
 }
 
 module.exports = SmartMatchingEngine

@@ -16,6 +16,8 @@ const {
   updateTaskStatus,
   exportMatchingResults,
   getMatchedProducts,
+  learnToMemory,
+  batchLearnToMemory,
 } = require("../controllers/matching.controller")
 
 const {
@@ -171,7 +173,7 @@ router.get(
       limit: require("joi").number().integer().min(1).max(1000).default(20),
       status: require("joi")
         .string()
-        .valid("pending", "reviewing", "confirmed", "rejected", "exception"),
+        .valid("pending", "confirmed", "rejected", "exception"),
     }),
   }),
   getAllMatchingRecords
@@ -190,7 +192,10 @@ router.post(
         .required(),
     }),
     body: require("joi").object({
-      action: require("joi").string().valid("confirm", "reject").required(),
+      action: require("joi")
+        .string()
+        .valid("confirm", "reject", "clear")
+        .required(),
       productId: require("joi")
         .string()
         .pattern(/^[0-9a-fA-F]{24}$/),
@@ -275,6 +280,53 @@ router.get(
   authenticateToken,
   authorize("matching.view"),
   getMatchedProducts
+)
+
+/**
+ * 记忆库管理路由
+ */
+
+// 手动学习记录到记忆库
+router.post(
+  "/records/:id/learn",
+  authenticateToken,
+  authorize("matching.review"),
+  validateRequest({
+    params: require("joi").object({
+      id: require("joi")
+        .string()
+        .pattern(/^[0-9a-fA-F]{24}$/)
+        .required(),
+    }),
+    body: require("joi").object({
+      note: require("joi").string().max(500).allow(""),
+      confidence: require("joi").number().min(0).max(100),
+    }),
+  }),
+  learnToMemory
+)
+
+// 批量学习到记忆库
+router.post(
+  "/records/batch-learn",
+  authenticateToken,
+  authorize("matching.review"),
+  validateRequest({
+    body: require("joi").object({
+      recordIds: require("joi")
+        .array()
+        .items(
+          require("joi")
+            .string()
+            .pattern(/^[0-9a-fA-F]{24}$/)
+        )
+        .min(1)
+        .max(100)
+        .required(),
+      note: require("joi").string().max(500).allow(""),
+    }),
+  }),
+  batchLearnToMemory
 )
 
 module.exports = router

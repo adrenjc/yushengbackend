@@ -310,16 +310,28 @@ ProductSchema.statics.searchProducts = function (query, options = {}) {
 
   const aggregation = []
 
-  // 文本搜索
+  // 文本搜索和条码搜索
   if (query) {
     aggregation.push({
       $match: {
-        $text: { $search: query },
+        $or: [
+          { $text: { $search: query } },
+          { productCode: { $regex: query, $options: "i" } },
+          { boxCode: { $regex: query, $options: "i" } },
+          { name: { $regex: query, $options: "i" } },
+          { brand: { $regex: query, $options: "i" } },
+        ],
       },
     })
     aggregation.push({
       $addFields: {
-        score: { $meta: "textScore" },
+        score: {
+          $cond: {
+            if: { $meta: "textScore" },
+            then: { $meta: "textScore" },
+            else: 1,
+          },
+        },
       },
     })
   }

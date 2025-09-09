@@ -51,6 +51,16 @@ const MatchingRecordSchema = new mongoose.Schema(
           required: true,
         },
 
+        // 商品基本信息（冗余存储，提升查询性能）
+        name: {
+          type: String,
+          trim: true,
+        },
+        brand: {
+          type: String,
+          trim: true,
+        },
+
         // 匹配得分详情
         score: {
           name: { type: Number, min: 0, max: 100 },
@@ -80,6 +90,7 @@ const MatchingRecordSchema = new mongoose.Schema(
                 "price_range",
                 "package_type",
                 "manual_selection",
+                "memory_match",
               ],
             },
             description: String,
@@ -92,6 +103,15 @@ const MatchingRecordSchema = new mongoose.Schema(
           type: Number,
           default: 0,
         },
+
+        // 是否为记忆匹配
+        isMemoryMatch: {
+          type: Boolean,
+          default: false,
+        },
+
+        // 记忆匹配源数据（可选）
+        memorySource: mongoose.Schema.Types.Mixed,
       },
     ],
 
@@ -101,6 +121,17 @@ const MatchingRecordSchema = new mongoose.Schema(
         type: mongoose.Schema.Types.ObjectId,
         ref: "Product",
       },
+
+      // 商品基本信息（冗余存储，提升查询性能）
+      name: {
+        type: String,
+        trim: true,
+      },
+      brand: {
+        type: String,
+        trim: true,
+      },
+
       confidence: Number,
       score: Number,
       confirmedBy: {
@@ -112,22 +143,21 @@ const MatchingRecordSchema = new mongoose.Schema(
       // 匹配类型
       matchType: {
         type: String,
-        enum: ["auto", "manual", "expert", "new_product"],
+        enum: ["auto", "manual", "expert", "new_product", "memory"],
         default: "auto",
+      },
+
+      // 是否为记忆匹配
+      isMemoryMatch: {
+        type: Boolean,
+        default: false,
       },
     },
 
     // 记录状态
     status: {
       type: String,
-      enum: [
-        "pending",
-        "reviewing",
-        "confirmed",
-        "rejected",
-        "exception",
-        "skipped",
-      ],
+      enum: ["pending", "confirmed", "rejected", "exception", "skipped"],
       default: "pending",
       required: true,
       index: true,
@@ -153,6 +183,7 @@ const MatchingRecordSchema = new mongoose.Schema(
             "reject",
             "reassign",
             "comment",
+            "clear",
           ],
           required: true,
         },
@@ -402,6 +433,26 @@ MatchingRecordSchema.methods.rejectMatch = function (userId, note) {
   return this.save()
 }
 
+// 实例方法：清空匹配
+MatchingRecordSchema.methods.clearMatch = function (userId, note) {
+  const previousStatus = this.status
+
+  // 清空匹配结果
+  this.selectedMatch = undefined
+  this.status = "pending"
+
+  this.addReviewHistory(
+    "clear",
+    userId,
+    note || "清空匹配商品",
+    previousStatus,
+    "pending",
+    { reason: "cleared_match" }
+  )
+
+  return this.save()
+}
+
 // 实例方法：添加审核历史
 MatchingRecordSchema.methods.addReviewHistory = function (
   action,
@@ -482,10 +533,11 @@ MatchingRecordSchema.methods.recordUserBehavior = function (
 MatchingRecordSchema.statics.getPendingReviews = function (
   filters = {},
   limit = 50,
-  sortBy = "priority"
+  sortBy = "priority",
+  page = 1
 ) {
   const query = {
-    status: { $in: ["reviewing", "exception"] },
+    status: { $in: ["pending", "exception"] },
     ...filters,
   }
 
@@ -493,7 +545,11 @@ MatchingRecordSchema.statics.getPendingReviews = function (
   switch (sortBy) {
     case "score":
       // 按匹配分数降序排序（最高分在前）
-      sortCondition = { "candidates.0.score.total": -1, priority: -1 }
+      sortCondition = {
+        "candidates.0.score.total": -1,
+        priority: -1,
+        createdAt: 1,
+      }
       break
     case "priority":
       // 按优先级降序排序（高优先级在前）
@@ -501,11 +557,15 @@ MatchingRecordSchema.statics.getPendingReviews = function (
       break
     case "confidence":
       // 按置信度降序排序
-      sortCondition = { "candidates.0.confidence": -1, priority: -1 }
+      sortCondition = {
+        "candidates.0.confidence": -1,
+        priority: -1,
+        createdAt: 1,
+      }
       break
     case "name":
       // 按原始名称升序排序
-      sortCondition = { "originalData.name": 1 }
+      sortCondition = { "originalData.name": 1, createdAt: 1 }
       break
     default:
       sortCondition = { priority: -1, createdAt: 1 }
@@ -524,6 +584,7 @@ MatchingRecordSchema.statics.getPendingReviews = function (
     .populate("selectedMatch.confirmedBy", "name email")
     .sort(sortCondition)
     .limit(limit)
+    .skip(Math.max(0, (parseInt(page) - 1) * parseInt(limit)))
 }
 
 // 静态方法：获取高风险记录

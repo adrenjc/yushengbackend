@@ -508,15 +508,49 @@ const searchProducts = asyncHandler(async (req, res) => {
 
   const results = await Product.searchProducts(query, searchOptions)
 
+  // 获取已匹配的商品详细信息（在指定模板下）
+  const MatchingMemory = require("../models/MatchingMemory")
+  const matchedMemories = await MatchingMemory.find({
+    templateId: templateId,
+    status: "active",
+  }).select("confirmedProductId originalName")
+
+  // 创建匹配映射：商品ID -> 原始商品名称
+  const matchedProductMap = new Map()
+  matchedMemories.forEach((memory) => {
+    matchedProductMap.set(
+      memory.confirmedProductId.toString(),
+      memory.originalName
+    )
+  })
+
+  const matchedProductIds = matchedMemories.map((m) => m.confirmedProductId)
+
+  // 标记已匹配的商品，并包含匹配详情
+  const productsWithMatchStatus = results.map((product) => {
+    const productIdStr = product._id.toString()
+    const isMatched = matchedProductMap.has(productIdStr)
+    const matchedByOriginalName = isMatched
+      ? matchedProductMap.get(productIdStr)
+      : null
+
+    return {
+      ...product,
+      isMatched,
+      matchedByOriginalName, // 添加匹配的原始商品名称
+    }
+  })
+
   res.json({
     success: true,
     data: {
-      products: results,
+      products: productsWithMatchStatus,
       query,
       pagination: {
         current: parseInt(page),
         limit: parseInt(limit),
       },
+      matchedCount: matchedProductIds.length,
     },
   })
 })

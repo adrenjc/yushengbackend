@@ -62,6 +62,7 @@ router.get(
   validateRequest({
     query: require("joi").object({
       q: require("joi").string().min(1).max(200).required(),
+      templateId: require("joi").string().min(1).max(50).required(),
       limit: require("joi").number().integer().min(1).max(100).default(20),
       brand: require("joi").string().max(100).allow(""),
       category: require("joi").string().max(100).allow(""),
