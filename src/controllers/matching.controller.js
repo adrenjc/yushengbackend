@@ -1005,35 +1005,16 @@ async function processMatchingTask(taskId) {
             await record.save()
             await updateProductWholesalePrice(record, bestCandidate.productId)
 
-            // 自动确认也要学习到记忆库
-            try {
-              await MatchingMemory.learnFromMatch(
-                record.originalData.name,
-                bestCandidate.productId,
-                bestScore,
-                task.createdBy,
-                record._id,
-                task._id,
-                task.templateId,
-                {
-                  source: bestCandidate.isMemoryMatch ? "learned" : "auto",
-                  initialWeight: bestCandidate.isMemoryMatch ? 2.0 : 1.0,
-                  requiresConfirmation: false,
-                }
-              )
-              logger.info("自动确认记忆学习成功", {
-                recordId: record._id,
-                originalName: record.originalData.name,
-                productId: bestCandidate.productId,
-                matchType: matchType,
-                score: bestScore,
-              })
-            } catch (memoryError) {
-              logger.error("自动确认记忆学习失败", {
-                recordId: record._id,
-                error: memoryError.message,
-              })
-            }
+            // 注释：自动确认不再学习到记忆库，改为完全手动学习模式
+            // 用户需要在确认后手动点击"学习到记忆库"按钮
+            logger.info("自动确认完成（未自动学习到记忆库）", {
+              recordId: record._id,
+              originalName: record.originalData.name,
+              productId: bestCandidate.productId,
+              matchType: matchType,
+              score: bestScore,
+              note: "需要手动学习到记忆库",
+            })
           } else if (bestScore >= 50) {
             // 降低审核阈值，让更多记录进入人工管理
             record.status = "pending"
@@ -1068,35 +1049,16 @@ async function processMatchingTask(taskId) {
               })
             }
 
-            // 高分匹配（≥85分）预先学习到记忆库，但权重较低
+            // 注释：高分匹配不再预先学习到记忆库，改为完全手动学习模式
+            // 即使是高分匹配，也需要用户手动学习到记忆库
             if (bestScore >= 85 && !hasConflict) {
-              try {
-                await MatchingMemory.learnFromMatch(
-                  record.originalData.name,
-                  bestCandidate.productId,
-                  bestScore,
-                  task.createdBy,
-                  record._id,
-                  task._id,
-                  task.templateId,
-                  {
-                    source: "auto", // 自动学习
-                    initialWeight: 0.8, // 预学习权重较低
-                    requiresConfirmation: true,
-                  }
-                )
-                logger.info("高分匹配预学习成功", {
-                  recordId: record._id,
-                  originalName: record.originalData.name,
-                  productId: bestCandidate.productId,
-                  score: bestScore,
-                })
-              } catch (memoryError) {
-                logger.error("高分匹配预学习失败", {
-                  recordId: record._id,
-                  error: memoryError.message,
-                })
-              }
+              logger.info("高分匹配检测到（未自动学习到记忆库）", {
+                recordId: record._id,
+                originalName: record.originalData.name,
+                productId: bestCandidate.productId,
+                score: bestScore,
+                note: "建议用户手动学习到记忆库",
+              })
             }
           } else {
             record.status = "exception"
@@ -1508,84 +1470,26 @@ const reviewMatchingRecord = asyncHandler(async (req, res) => {
     const task = await MatchingTask.findById(record.taskId)
     const templateId = task?.templateId
 
-    // 双向同步：处理匹配更改或新匹配学习
-    try {
-      if (oldProductId && oldProductId.toString() !== productId) {
-        // 用户更改了匹配商品，处理匹配更改
-        await MatchingMemory.handleMatchChange(
-          record.originalData.name,
-          oldProductId,
-          productId,
-          record.selectedMatch?.confidence || 100,
-          req.user._id,
-          record._id,
-          record.taskId,
-          templateId
-        )
-
-        logger.info("记忆库同步成功：处理匹配更改", {
-          recordId: record._id,
-          originalName: record.originalData.name,
-          oldProductId,
-          newProductId: productId,
-        })
-      } else {
-        // 新的匹配确认，正常学习
-        await MatchingMemory.learnFromMatch(
-          record.originalData.name,
-          productId,
-          record.selectedMatch?.confidence || 100,
-          req.user._id,
-          record._id,
-          record.taskId,
-          templateId,
-          {
-            source: "manual",
-            initialWeight: 1.5,
-            requiresConfirmation: false,
-          }
-        )
-
-        logger.info("记忆库学习成功", {
-          recordId: record._id,
-          originalName: record.originalData.name,
-          productId,
-        })
-      }
-    } catch (memoryError) {
-      logger.error("记忆库同步失败", {
-        recordId: record._id,
-        error: memoryError.message,
-      })
-      // 不影响主流程，继续执行
-    }
+    // 注释：自动学习功能已移除，改为完全手动学习模式
+    // 用户需要主动点击"学习到记忆库"按钮才会保存到记忆库
+    logger.info("匹配确认成功（未自动学习到记忆库）", {
+      recordId: record._id,
+      originalName: record.originalData.name,
+      productId,
+      oldProductId,
+      note: "需要手动学习到记忆库",
+    })
   } else if (action === "reject") {
     result = await record.rejectMatch(req.user._id, note)
 
-    // 双向同步：处理记忆库中被拒绝的匹配
-    if (record.selectedMatch?.productId) {
-      try {
-        await MatchingMemory.handleRejectedMatch(
-          record.originalData.name,
-          record.selectedMatch.productId,
-          req.user._id,
-          record._id,
-          record.taskId
-        )
-
-        logger.info("记忆库同步成功：处理拒绝匹配", {
-          recordId: record._id,
-          originalName: record.originalData.name,
-          rejectedProductId: record.selectedMatch.productId,
-        })
-      } catch (memoryError) {
-        logger.error("记忆库同步失败：处理拒绝匹配", {
-          recordId: record._id,
-          error: memoryError.message,
-        })
-        // 不影响主流程，继续执行
-      }
-    }
+    // 注释：自动更新记忆库功能已移除，拒绝匹配不再自动影响记忆库
+    // 记忆库的管理完全由用户手动控制
+    logger.info("匹配拒绝成功（未自动更新记忆库）", {
+      recordId: record._id,
+      originalName: record.originalData.name,
+      rejectedProductId: record.selectedMatch?.productId,
+      note: "记忆库需手动管理",
+    })
   } else if (action === "clear") {
     result = await record.clearMatch(req.user._id, note)
   } else {
@@ -1620,11 +1524,11 @@ const reviewMatchingRecord = asyncHandler(async (req, res) => {
 })
 
 /**
- * 手动学习匹配记录到记忆库
+ * 手动学习匹配记录到记忆库（增强版本）
  */
 const learnToMemory = asyncHandler(async (req, res) => {
   const { id } = req.params
-  const { note, confidence } = req.body
+  const { note, confidence, qualityScore } = req.body
 
   const record = await MatchingRecord.findById(id)
   if (!record) {
@@ -1641,7 +1545,7 @@ const learnToMemory = asyncHandler(async (req, res) => {
   const templateId = task?.templateId
 
   try {
-    await MatchingMemory.learnFromMatch(
+    const learningResult = await MatchingMemory.learnFromMatch(
       record.originalData.name,
       record.selectedMatch.productId,
       confidence || record.selectedMatch.confidence || 100,
@@ -1652,45 +1556,67 @@ const learnToMemory = asyncHandler(async (req, res) => {
       {
         source: "manual",
         initialWeight: 2.0, // 手动学习权重较高
-        requiresConfirmation: false,
+        learningMethod: "single_learn",
+        learningNote: note || "用户手动学习",
       }
     )
+
+    // 如果用户提供了质量评分，更新质量控制信息
+    if (qualityScore && qualityScore >= 1 && qualityScore <= 5) {
+      learningResult.metadata.qualityControl.qualityScore = qualityScore
+      learningResult.metadata.qualityControl.qualityNotes = note || "用户评分"
+      await learningResult.save()
+    }
 
     logOperation("手动学习记忆", req.user, {
       recordId: record._id,
       originalName: record.originalData.name,
       productId: record.selectedMatch.productId,
+      taskName: task?.taskName,
+      taskIdentifier: task?.taskIdentifier,
       note,
+      qualityScore,
     })
 
     res.json({
       success: true,
       message: "已成功学习到记忆库",
-      data: { recordId: record._id },
+      data: {
+        recordId: record._id,
+        memoryId: learningResult._id,
+        learningInfo: {
+          taskName: task?.taskName || "未知任务",
+          taskIdentifier: task?.taskIdentifier || "",
+          fileName: task?.originalFilename || "",
+          learnedAt: new Date(),
+          learningMethod: "single_learn",
+        },
+      },
     })
   } catch (error) {
     logger.error("手动学习记忆失败", {
       recordId: record._id,
+      taskName: task?.taskName,
       error: error.message,
     })
 
     if (error.code === 11000) {
       res.json({
         success: true,
-        message: "该匹配已存在于记忆库中",
+        message: "该匹配已存在于记忆库中，已更新使用统计",
         data: { recordId: record._id },
       })
     } else {
-      throw new BusinessError("学习到记忆库失败")
+      throw new BusinessError(`学习到记忆库失败: ${error.message}`)
     }
   }
 })
 
 /**
- * 批量学习到记忆库
+ * 批量学习到记忆库（增强版本）
  */
 const batchLearnToMemory = asyncHandler(async (req, res) => {
-  const { recordIds, note } = req.body
+  const { recordIds, note, qualityScore } = req.body
 
   if (!recordIds || !Array.isArray(recordIds) || recordIds.length === 0) {
     throw new BusinessError("请提供要学习的记录ID列表")
@@ -1700,71 +1626,137 @@ const batchLearnToMemory = asyncHandler(async (req, res) => {
     success: [],
     failed: [],
     total: recordIds.length,
+    summary: {
+      taskGroups: new Map(),
+      totalLearned: 0,
+      totalUpdated: 0,
+    },
   }
 
-  for (const recordId of recordIds) {
-    try {
-      const record = await MatchingRecord.findById(recordId)
+  // 分批处理，避免内存压力
+  const batchSize = 50
+  for (let i = 0; i < recordIds.length; i += batchSize) {
+    const batchIds = recordIds.slice(i, i + batchSize)
 
-      if (!record) {
-        results.failed.push({ recordId, error: "记录不存在" })
-        continue
-      }
+    // 批量获取记录和任务信息
+    const records = await MatchingRecord.find({ _id: { $in: batchIds } })
+    const taskIds = [...new Set(records.map((r) => r.taskId))]
+    const tasks = await MatchingTask.find({ _id: { $in: taskIds } })
+    const taskMap = new Map(tasks.map((t) => [t._id.toString(), t]))
 
-      if (!record.selectedMatch?.productId) {
-        results.failed.push({ recordId, error: "没有匹配的商品" })
-        continue
-      }
-
-      // 获取任务信息
-      const MatchingTask = require("../models/MatchingTask")
-      const task = await MatchingTask.findById(record.taskId)
-      const templateId = task?.templateId
-
-      await MatchingMemory.learnFromMatch(
-        record.originalData.name,
-        record.selectedMatch.productId,
-        record.selectedMatch.confidence || 100,
-        req.user._id,
-        record._id,
-        record.taskId,
-        templateId,
-        {
-          source: "manual",
-          initialWeight: 2.0,
-          requiresConfirmation: false,
+    for (const record of records) {
+      try {
+        if (!record.selectedMatch?.productId) {
+          results.failed.push({
+            recordId: record._id,
+            error: "没有匹配的商品",
+            originalName: record.originalData.name,
+          })
+          continue
         }
-      )
 
-      results.success.push({
-        recordId,
-        originalName: record.originalData.name,
-      })
-    } catch (error) {
-      logger.error("批量学习记忆失败", { recordId, error: error.message })
+        const task = taskMap.get(record.taskId.toString())
+        const templateId = task?.templateId
 
-      if (error.code === 11000) {
-        results.success.push({
-          recordId,
-          note: "已存在于记忆库",
+        const learningResult = await MatchingMemory.learnFromMatch(
+          record.originalData.name,
+          record.selectedMatch.productId,
+          record.selectedMatch.confidence || 100,
+          req.user._id,
+          record._id,
+          record.taskId,
+          templateId,
+          {
+            source: "manual",
+            initialWeight: 2.0,
+            learningMethod: "batch_learn",
+            learningNote: note || "批量学习",
+          }
+        )
+
+        // 批量学习的质量评分
+        if (qualityScore && qualityScore >= 1 && qualityScore <= 5) {
+          learningResult.metadata.qualityControl.qualityScore = qualityScore
+          learningResult.metadata.qualityControl.qualityNotes = `批量学习: ${
+            note || "无备注"
+          }`
+          await learningResult.save()
+        }
+
+        // 统计任务分组
+        const taskKey = task?.taskName || "未知任务"
+        if (!results.summary.taskGroups.has(taskKey)) {
+          results.summary.taskGroups.set(taskKey, {
+            taskName: taskKey,
+            taskIdentifier: task?.taskIdentifier || "",
+            count: 0,
+            records: [],
+          })
+        }
+
+        const taskGroup = results.summary.taskGroups.get(taskKey)
+        taskGroup.count++
+        taskGroup.records.push({
+          recordId: record._id,
+          originalName: record.originalData.name,
+          productName: record.selectedMatch.productId.name || "未知商品",
         })
-      } else {
-        results.failed.push({ recordId, error: error.message })
+
+        results.success.push({
+          recordId: record._id,
+          originalName: record.originalData.name,
+          taskName: task?.taskName,
+          memoryId: learningResult._id,
+        })
+
+        results.summary.totalLearned++
+      } catch (error) {
+        logger.error("批量学习记忆失败", {
+          recordId: record._id,
+          originalName: record.originalData.name,
+          error: error.message,
+        })
+
+        if (error.code === 11000) {
+          results.success.push({
+            recordId: record._id,
+            originalName: record.originalData.name,
+            note: "已存在于记忆库，已更新使用统计",
+          })
+          results.summary.totalUpdated++
+        } else {
+          results.failed.push({
+            recordId: record._id,
+            originalName: record.originalData.name,
+            error: error.message,
+          })
+        }
       }
     }
   }
+
+  // 转换任务分组为数组
+  results.summary.taskGroups = Array.from(results.summary.taskGroups.values())
 
   logOperation("批量学习记忆", req.user, {
     totalRecords: results.total,
     successCount: results.success.length,
     failedCount: results.failed.length,
+    taskGroups: results.summary.taskGroups.length,
     note,
+    qualityScore,
   })
 
   res.json({
     success: true,
     message: `批量学习完成，成功 ${results.success.length} 条，失败 ${results.failed.length} 条`,
-    data: results,
+    data: {
+      ...results,
+      summary: {
+        ...results.summary,
+        taskGroups: results.summary.taskGroups,
+      },
+    },
   })
 })
 
@@ -1863,49 +1855,15 @@ const batchReviewMatchingRecords = asyncHandler(async (req, res) => {
         )
         await updateProductWholesalePrice(record, productId)
 
-        // 双向同步：批量确认记忆学习
-        try {
-          // 获取任务信息以获取templateId
-          const MatchingTask = require("../models/MatchingTask")
-          const task = await MatchingTask.findById(record.taskId)
-          const templateId = task?.templateId
-
-          if (oldProductId && oldProductId.toString() !== productId) {
-            // 用户更改了匹配商品，处理匹配更改
-            await MatchingMemory.handleMatchChange(
-              record.originalData.name,
-              oldProductId,
-              productId,
-              record.selectedMatch?.confidence || 100,
-              req.user._id,
-              record._id,
-              record.taskId,
-              templateId
-            )
-          } else {
-            // 新的匹配确认，正常学习
-            await MatchingMemory.learnFromMatch(
-              record.originalData.name,
-              productId,
-              record.selectedMatch?.confidence || 100,
-              req.user._id,
-              record._id,
-              record.taskId,
-              templateId,
-              {
-                source: "manual",
-                initialWeight: 1.5,
-                requiresConfirmation: false,
-              }
-            )
-          }
-        } catch (memoryError) {
-          logger.error("批量记忆库同步失败", {
-            recordId: record._id,
-            error: memoryError.message,
-          })
-          // 不影响主流程，继续执行
-        }
+        // 注释：批量确认不再自动学习到记忆库，改为完全手动学习模式
+        // 用户需要使用专门的"批量学习到记忆库"功能
+        logger.info("批量确认完成（未自动学习到记忆库）", {
+          recordId: record._id,
+          originalName: record.originalData.name,
+          productId: productId,
+          oldProductId: oldProductId,
+          note: "需要手动学习到记忆库",
+        })
       } else {
         result = await record.rejectMatch(req.user._id, note || "批量拒绝")
 

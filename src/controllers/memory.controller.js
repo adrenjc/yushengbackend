@@ -39,11 +39,45 @@ const getMemories = asyncHandler(async (req, res) => {
     query.templateId = templateId
   }
 
+  // 搜索逻辑 - 支持商品字段搜索
   if (search) {
-    query.$or = [
-      { originalWholesaleName: { $regex: search, $options: "i" } },
-      { normalizedWholesaleName: { $regex: search, $options: "i" } },
-    ]
+    console.log(`🔍 执行搜索，关键词: "${search}"`)
+
+    // 构建基础的记忆搜索条件
+    const memorySearchCondition = {
+      $or: [
+        { originalWholesaleName: { $regex: search, $options: "i" } },
+        { normalizedWholesaleName: { $regex: search, $options: "i" } },
+      ],
+    }
+
+    // 查找匹配的商品ID
+    const Product = require("../models/Product")
+    const matchingProducts = await Product.find(
+      {
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { brand: { $regex: search, $options: "i" } },
+          { productCode: { $regex: search, $options: "i" } },
+          { boxCode: { $regex: search, $options: "i" } },
+        ],
+      },
+      "_id"
+    ).lean()
+
+    const matchingProductIds = matchingProducts.map((p) => p._id)
+    console.log(`🔍 找到 ${matchingProductIds.length} 个匹配的商品`)
+
+    // 组合搜索条件
+    if (matchingProductIds.length > 0) {
+      query.$or = [
+        memorySearchCondition,
+        { confirmedProductId: { $in: matchingProductIds } },
+      ]
+    } else {
+      // 如果没有匹配的商品，只搜索记忆字段
+      Object.assign(query, memorySearchCondition)
+    }
   }
 
   // 构建排序条件
@@ -68,6 +102,8 @@ const getMemories = asyncHandler(async (req, res) => {
       sortCondition = { weight: -1, confirmCount: -1 }
   }
 
+  console.log(`🔍 最终查询条件:`, JSON.stringify(query, null, 2))
+
   const [memories, total, statistics] = await Promise.all([
     MatchingMemory.find(query)
       .populate(
@@ -75,6 +111,14 @@ const getMemories = asyncHandler(async (req, res) => {
         "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
       )
       .populate("confirmedBy", "name email")
+      .populate(
+        "metadata.learningSource.sourceTask.taskId",
+        "originalFilename templateName createdAt status"
+      )
+      .populate(
+        "relatedRecords.taskId",
+        "originalFilename templateName createdAt status"
+      )
       .sort(sortCondition)
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit))
@@ -129,8 +173,15 @@ const getMemoryById = asyncHandler(async (req, res) => {
       "name brand company productType packageType specifications chemicalContent appearance features pricing productCode boxCode"
     )
     .populate("confirmedBy", "name email")
+    .populate(
+      "metadata.learningSource.sourceTask.taskId",
+      "originalFilename templateName createdAt status"
+    )
     .populate("relatedRecords.recordId", "originalData status")
-    .populate("relatedRecords.taskId", "originalFilename createdAt")
+    .populate(
+      "relatedRecords.taskId",
+      "originalFilename templateName createdAt status"
+    )
 
   if (!memory) {
     throw new NotFoundError("匹配记忆")
@@ -388,6 +439,43 @@ async function getStatistics() {
   }
 }
 
+// 清理重复记忆
+const cleanupDuplicateMemories = asyncHandler(async (req, res) => {
+  const { templateId } = req.body
+
+  try {
+    logger.info("开始清理重复记忆", {
+      userId: req.user._id,
+      templateId: templateId || "all",
+    })
+
+    const result = await MatchingMemory.cleanupDuplicateMemories(templateId)
+
+    logOperation("清理重复记忆", req.user, {
+      duplicatesFound: result.duplicatesFound,
+      cleanedCount: result.cleanedCount,
+      templateId: templateId || "all",
+    })
+
+    res.json({
+      success: true,
+      message: `清理完成，发现 ${result.duplicatesFound} 组重复数据，处理了 ${result.cleanedCount} 条重复记忆`,
+      data: {
+        duplicatesFound: result.duplicatesFound,
+        cleanedCount: result.cleanedCount,
+        templateId: templateId || "all",
+      },
+    })
+  } catch (error) {
+    logger.error("清理重复记忆失败", {
+      userId: req.user._id,
+      templateId: templateId || "all",
+      error: error.message,
+    })
+    throw error
+  }
+})
+
 // 清空所有记忆（危险操作，仅用于测试）
 const clearAllMemories = asyncHandler(async (req, res) => {
   try {
@@ -419,6 +507,7 @@ module.exports = {
   updateMemory,
   deleteMemory,
   cleanupMemories,
+  cleanupDuplicateMemories,
   getMemoryStatistics,
   clearAllMemories,
 }

@@ -44,11 +44,11 @@ const MatchingMemorySchema = new mongoose.Schema(
       required: true,
     },
 
-    // 匹配来源
+    // 匹配来源 - 全部改为手动
     source: {
       type: String,
-      enum: ["auto", "manual", "expert", "learned"],
-      default: "auto", // 改为auto，因为大部分是自动学习产生的
+      enum: ["manual", "expert", "imported", "migrated"],
+      default: "manual", // 现在只支持手动学习
     },
 
     // 确认次数（相同匹配被确认的次数）
@@ -123,12 +123,56 @@ const MatchingMemorySchema = new mongoose.Schema(
       index: true,
     },
 
-    // 元数据
+    // 元数据 - 增强版本
     metadata: {
-      // 创建来源
-      sourceTask: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "MatchingTask",
+      // 学习来源信息（详细）
+      learningSource: {
+        // 来源任务信息
+        sourceTask: {
+          taskId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "MatchingTask",
+          },
+          taskName: String, // 任务名称
+          taskIdentifier: String, // 任务标识符
+          fileName: String, // 原始文件名
+        },
+
+        // 学习详情
+        learnedAt: {
+          type: Date,
+          default: Date.now,
+          required: true,
+        },
+        learnedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        learningMethod: {
+          type: String,
+          enum: ["single_learn", "batch_learn", "bulk_import", "manual_add"],
+          default: "single_learn",
+        },
+        learningNote: String, // 学习时的备注
+
+        // 原始匹配类型（记录最初是如何匹配的）
+        originalMatchType: {
+          type: String,
+          enum: ["auto", "memory", "manual", "unknown"],
+          default: "unknown",
+        },
+
+        // 学习上下文
+        originalRecord: {
+          recordId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "MatchingRecord",
+          },
+          rowNumber: Number, // 原始数据行号
+          originalPrice: Number, // 原始价格
+          originalQuantity: Number, // 原始数量
+        },
       },
 
       // 使用统计
@@ -136,10 +180,44 @@ const MatchingMemorySchema = new mongoose.Schema(
         totalUsed: { type: Number, default: 0 },
         successRate: { type: Number, default: 100 },
         lastUsedAt: Date,
+        recentUsage: [
+          {
+            usedAt: Date,
+            taskId: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: "MatchingTask",
+            },
+            userId: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: "User",
+            },
+            matchedRecordId: {
+              type: mongoose.Schema.Types.ObjectId,
+              ref: "MatchingRecord",
+            },
+          },
+        ],
       },
 
-      // 是否需要进一步确认（用于自动学习的记忆）
-      requiresConfirmation: { type: Boolean, default: false },
+      // 质量管理
+      qualityControl: {
+        // 是否经过专家验证
+        expertVerified: { type: Boolean, default: false },
+        verifiedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
+        verifiedAt: Date,
+
+        // 质量评级
+        qualityScore: {
+          type: Number,
+          min: 1,
+          max: 5,
+          default: 3,
+        },
+        qualityNotes: String,
+      },
 
       // 冲突信息
       conflicts: [
@@ -156,6 +234,27 @@ const MatchingMemorySchema = new mongoose.Schema(
           },
         },
       ],
+
+      // 审计追踪
+      auditTrail: [
+        {
+          action: {
+            type: String,
+            enum: ["created", "updated", "verified", "deprecated", "restored"],
+          },
+          performedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+          },
+          performedAt: {
+            type: Date,
+            default: Date.now,
+          },
+          details: String,
+          oldValues: mongoose.Schema.Types.Mixed,
+          newValues: mongoose.Schema.Types.Mixed,
+        },
+      ],
     },
   },
   {
@@ -166,10 +265,19 @@ const MatchingMemorySchema = new mongoose.Schema(
 )
 
 // 复合索引
+// 确保同一模板下，同一批发名只能对应一个激活状态的商品
 MatchingMemorySchema.index(
-  { normalizedWholesaleName: 1, confirmedProductId: 1 },
-  { unique: true }
+  { normalizedWholesaleName: 1, templateId: 1, status: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: "active" },
+  }
 )
+// 保留原有的索引用于查询优化
+MatchingMemorySchema.index({
+  normalizedWholesaleName: 1,
+  confirmedProductId: 1,
+})
 MatchingMemorySchema.index({ normalizedWholesaleName: "text" })
 MatchingMemorySchema.index({
   status: 1,
@@ -364,7 +472,7 @@ MatchingMemorySchema.statics.findMatching = async function (
   return results
 }
 
-// 静态方法：学习新的匹配
+// 静态方法：手动学习新的匹配（增强版本）
 MatchingMemorySchema.statics.learnFromMatch = async function (
   originalName,
   productId,
@@ -378,11 +486,59 @@ MatchingMemorySchema.statics.learnFromMatch = async function (
   const { normalizeText } = require("../utils/matching-algorithm")
   const normalizedName = normalizeText(originalName)
 
-  // 检查是否已存在相同的记忆（在同一模板下）
+  // 获取任务信息（用于详细追踪）
+  const MatchingTask = require("./MatchingTask")
+  const MatchingRecord = require("./MatchingRecord")
+
+  const [task, record] = await Promise.all([
+    MatchingTask.findById(taskId),
+    MatchingRecord.findById(recordId),
+  ])
+
+  // 首先检查是否已存在相同批发名对应不同商品的记忆（确保一对一关系）
+  const existingMemoryWithSameName = await this.findOne({
+    normalizedWholesaleName: normalizedName,
+    templateId: templateId,
+    status: "active",
+  })
+
+  // 如果存在相同批发名但不同商品的记忆，需要处理冲突
+  if (
+    existingMemoryWithSameName &&
+    existingMemoryWithSameName.confirmedProductId.toString() !==
+      productId.toString()
+  ) {
+    console.log(
+      `⚠️  发现批发名冲突: "${originalName}" 已对应其他商品，将废弃旧记忆`
+    )
+
+    // 将旧记忆标记为废弃，并添加审计记录
+    existingMemoryWithSameName.status = "deprecated"
+    existingMemoryWithSameName.metadata.auditTrail.push({
+      action: "deprecated",
+      performedBy: userId,
+      performedAt: new Date(),
+      details: `批发名重新分配给新商品 ${productId}，旧商品 ${existingMemoryWithSameName.confirmedProductId}`,
+      oldValues: {
+        confirmedProductId: existingMemoryWithSameName.confirmedProductId,
+        status: "active",
+      },
+      newValues: {
+        status: "deprecated",
+        reason: "name_reassigned",
+      },
+    })
+
+    await existingMemoryWithSameName.save()
+    console.log(`✅ 已废弃旧记忆: ${existingMemoryWithSameName._id}`)
+  }
+
+  // 然后检查是否已存在完全相同的记忆（批发名 + 商品ID + 模板ID）
   let memory = await this.findOne({
     normalizedWholesaleName: normalizedName,
     confirmedProductId: productId,
     templateId: templateId,
+    status: "active",
   })
 
   if (memory) {
@@ -392,12 +548,14 @@ MatchingMemorySchema.statics.learnFromMatch = async function (
     )
 
     if (alreadyLearnedInTask) {
-      // 同一任务内的重复，只添加记录但不增加确认次数
-      memory.relatedRecords.push({
-        recordId,
-        taskId,
-        timestamp: new Date(),
+      // 同一任务内的重复，添加审计记录
+      memory.metadata.auditTrail.push({
+        action: "updated",
+        performedBy: userId,
+        performedAt: new Date(),
+        details: "同一任务内重复学习，增加使用统计",
       })
+
       memory.metadata.usageStats.totalUsed += 1
       memory.metadata.usageStats.lastUsedAt = new Date()
       return memory.save()
@@ -410,10 +568,11 @@ MatchingMemorySchema.statics.learnFromMatch = async function (
     const {
       source = "manual",
       initialWeight = 1.0,
-      requiresConfirmation = false,
+      learningMethod = "single_learn",
+      learningNote = "",
     } = options
 
-    // 创建新的记忆
+    // 创建新的记忆（增强版本）
     memory = new this({
       normalizedWholesaleName: normalizedName,
       originalWholesaleName: originalName,
@@ -431,12 +590,57 @@ MatchingMemorySchema.statics.learnFromMatch = async function (
         },
       ],
       metadata: {
-        sourceTask: taskId,
+        // 详细的学习来源信息
+        learningSource: {
+          sourceTask: {
+            taskId: taskId,
+            taskName: task?.taskName || "未知任务",
+            taskIdentifier: task?.taskIdentifier || "",
+            fileName: task?.originalFilename || "",
+          },
+          learnedAt: new Date(),
+          learnedBy: userId,
+          learningMethod: learningMethod,
+          learningNote: learningNote,
+          originalMatchType: record?.selectedMatch?.matchType || "unknown", // 新增：原始匹配方式
+          originalRecord: {
+            recordId: recordId,
+            rowNumber: record?.metadata?.source?.row || 0,
+            originalPrice: record?.originalData?.price || 0,
+            originalQuantity: record?.originalData?.quantity || 0,
+          },
+        },
+
+        // 使用统计
         usageStats: {
           totalUsed: 1,
           lastUsedAt: new Date(),
+          recentUsage: [
+            {
+              usedAt: new Date(),
+              taskId: taskId,
+              userId: userId,
+              matchedRecordId: recordId,
+            },
+          ],
         },
-        requiresConfirmation: requiresConfirmation,
+
+        // 质量控制（初始值）
+        qualityControl: {
+          expertVerified: false,
+          qualityScore: 3,
+          qualityNotes: "新创建的记忆，待验证",
+        },
+
+        // 审计追踪
+        auditTrail: [
+          {
+            action: "created",
+            performedBy: userId,
+            performedAt: new Date(),
+            details: `手动学习创建，来源任务: ${task?.taskName || "未知"}`,
+          },
+        ],
       },
     })
 
@@ -539,6 +743,94 @@ MatchingMemorySchema.statics.handleMatchChange = async function (
   )
 
   return true
+}
+
+// 静态方法：清理重复的记忆（确保一个批发名只对应一个商品）
+MatchingMemorySchema.statics.cleanupDuplicateMemories = async function (
+  templateId = null
+) {
+  console.log("🧹 开始清理重复的记忆库数据...")
+
+  const baseMatch = { status: "active" }
+  if (templateId) {
+    baseMatch.templateId = new mongoose.Types.ObjectId(templateId)
+  }
+
+  // 查找同一批发名对应多个商品的情况
+  const duplicates = await this.aggregate([
+    { $match: baseMatch },
+    {
+      $group: {
+        _id: {
+          normalizedWholesaleName: "$normalizedWholesaleName",
+          templateId: "$templateId",
+        },
+        memories: {
+          $push: {
+            id: "$_id",
+            confirmedProductId: "$confirmedProductId",
+            lastConfirmedAt: "$lastConfirmedAt",
+            confirmCount: "$confirmCount",
+            confidence: "$confidence",
+          },
+        },
+        count: { $sum: 1 },
+      },
+    },
+    { $match: { count: { $gt: 1 } } },
+  ])
+
+  let cleanedCount = 0
+
+  for (const duplicate of duplicates) {
+    const memories = duplicate.memories
+
+    // 按优先级排序：最近确认时间 > 确认次数 > 置信度
+    memories.sort((a, b) => {
+      if (a.lastConfirmedAt !== b.lastConfirmedAt) {
+        return new Date(b.lastConfirmedAt) - new Date(a.lastConfirmedAt)
+      }
+      if (a.confirmCount !== b.confirmCount) {
+        return b.confirmCount - a.confirmCount
+      }
+      return b.confidence - a.confidence
+    })
+
+    // 保留第一个（优先级最高的），废弃其他的
+    const keepMemory = memories[0]
+    const deprecateMemories = memories.slice(1)
+
+    console.log(
+      `⚠️  发现重复批发名: "${duplicate._id.normalizedWholesaleName}"`
+    )
+    console.log(
+      `✅ 保留记忆: ${keepMemory.id} (商品: ${keepMemory.confirmedProductId})`
+    )
+
+    for (const memory of deprecateMemories) {
+      await this.findByIdAndUpdate(memory.id, {
+        status: "deprecated",
+        $push: {
+          "metadata.auditTrail": {
+            action: "deprecated",
+            performedBy: null, // 系统自动清理
+            performedAt: new Date(),
+            details: `系统自动清理重复记忆，保留更优先的记忆 ${keepMemory.id}`,
+            oldValues: { status: "active" },
+            newValues: { status: "deprecated", reason: "duplicate_cleanup" },
+          },
+        },
+      })
+
+      console.log(
+        `🗑️  废弃重复记忆: ${memory.id} (商品: ${memory.confirmedProductId})`
+      )
+      cleanedCount++
+    }
+  }
+
+  console.log(`✅ 清理完成，共处理 ${cleanedCount} 条重复记忆`)
+  return { cleanedCount, duplicatesFound: duplicates.length }
 }
 
 // 静态方法：清理过时记忆

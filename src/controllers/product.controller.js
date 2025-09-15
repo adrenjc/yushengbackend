@@ -417,7 +417,7 @@ const getProductStats = asyncHandler(async (req, res) => {
     Product.aggregate([
       {
         $match: {
-          templateId: mongoose.Types.ObjectId(templateId),
+          templateId: new mongoose.Types.ObjectId(templateId),
           isActive: true,
         },
       },
@@ -428,7 +428,7 @@ const getProductStats = asyncHandler(async (req, res) => {
     Product.aggregate([
       {
         $match: {
-          templateId: mongoose.Types.ObjectId(templateId),
+          templateId: new mongoose.Types.ObjectId(templateId),
           isActive: true,
         },
       },
@@ -446,7 +446,7 @@ const getProductStats = asyncHandler(async (req, res) => {
     Product.aggregate([
       {
         $match: {
-          templateId: mongoose.Types.ObjectId(templateId),
+          templateId: new mongoose.Types.ObjectId(templateId),
           isActive: true,
         },
       },
@@ -457,7 +457,7 @@ const getProductStats = asyncHandler(async (req, res) => {
     Product.aggregate([
       {
         $match: {
-          templateId: mongoose.Types.ObjectId(templateId),
+          templateId: new mongoose.Types.ObjectId(templateId),
           isActive: true,
         },
       },
@@ -502,6 +502,7 @@ const searchProducts = asyncHandler(async (req, res) => {
 
   const searchOptions = {
     ...filters,
+    templateId: templateId, // 添加templateId到搜索选项
     limit: parseInt(limit),
     page: parseInt(page),
   }

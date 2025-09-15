@@ -685,25 +685,19 @@ class SmartMatchingEngine {
     recordId,
     taskId
   ) {
-    try {
-      await MatchingMemory.learnFromMatch(
-        originalName,
-        productId,
-        confidence,
-        userId,
-        recordId,
-        taskId
-      )
+    // 完全禁用自动学习功能 - 现在只有手动学习模式
+    logger.info("自动学习已禁用，需要手动学习到记忆库", {
+      originalName,
+      productId,
+      confidence,
+      userId,
+      recordId,
+      taskId,
+      note: "自动学习功能已被完全禁用",
+    })
 
-      logger.info("匹配学习完成", {
-        originalName,
-        productId,
-        confidence,
-        userId,
-      })
-    } catch (error) {
-      logger.error("匹配学习失败:", error)
-    }
+    // 不执行任何学习操作，直接返回
+    return Promise.resolve()
   }
 
   /**

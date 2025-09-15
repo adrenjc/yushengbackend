@@ -295,6 +295,7 @@ ProductSchema.virtual("chemicalInfo").get(function () {
 // === 静态方法 ===
 ProductSchema.statics.searchProducts = function (query, options = {}) {
   const {
+    templateId,
     brand,
     company,
     productType,
@@ -338,6 +339,12 @@ ProductSchema.statics.searchProducts = function (query, options = {}) {
 
   // 过滤条件
   const matchConditions = { isActive: true }
+
+  // 添加模板ID过滤 - 这是关键修复
+  if (templateId) {
+    matchConditions.templateId = new mongoose.Types.ObjectId(templateId)
+  }
+
   if (brand) matchConditions.brand = new RegExp(brand, "i")
   if (company) matchConditions.company = new RegExp(company, "i")
   if (productType) matchConditions.productType = productType
@@ -373,7 +380,7 @@ ProductSchema.statics.getBrandStats = function (templateId) {
   return this.aggregate([
     {
       $match: {
-        templateId: mongoose.Types.ObjectId(templateId),
+        templateId: new mongoose.Types.ObjectId(templateId),
         isActive: true,
       },
     },
@@ -387,7 +394,7 @@ ProductSchema.statics.getPriceDistribution = function (templateId) {
   return this.aggregate([
     {
       $match: {
-        templateId: mongoose.Types.ObjectId(templateId),
+        templateId: new mongoose.Types.ObjectId(templateId),
         isActive: true,
       },
     },

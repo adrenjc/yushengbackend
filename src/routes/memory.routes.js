@@ -10,6 +10,7 @@ const {
   updateMemory,
   deleteMemory,
   cleanupMemories,
+  cleanupDuplicateMemories,
   getMemoryStatistics,
   clearAllMemories,
 } = require("../controllers/memory.controller")
@@ -22,6 +23,9 @@ router.get("/statistics", auth, getMemoryStatistics)
 
 // 清理废弃记忆
 router.post("/cleanup", auth, cleanupMemories)
+
+// 清理重复记忆
+router.post("/cleanup-duplicates", auth, cleanupDuplicateMemories)
 
 // 清空所有记忆（危险操作，仅用于测试）- 放在动态路由前面
 router.delete("/clear-all", auth, clearAllMemories)
