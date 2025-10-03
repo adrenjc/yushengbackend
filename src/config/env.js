@@ -72,6 +72,12 @@ const config = {
     },
   },
 
+  // 定时调度器配置
+  SCHEDULER: {
+    ENABLED: process.env.SCHEDULER_ENABLED === "true",
+    TIMEZONE: process.env.SCHEDULER_TIMEZONE || "Asia/Shanghai",
+  },
+
   // API限制配置
   RATE_LIMIT: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15分钟

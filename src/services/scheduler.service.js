@@ -4,6 +4,7 @@
  */
 
 const cron = require("node-cron")
+const config = require("../config/env")
 const { logger } = require("../utils/logger")
 const {
   cleanupFiles,
@@ -22,6 +23,11 @@ class SchedulerService {
   async initialize() {
     if (this.isInitialized) {
       logger.warn("定时任务服务已经初始化")
+      return
+    }
+
+    if (!config.SCHEDULER || !config.SCHEDULER.ENABLED) {
+      logger.info("定时调度器未启用，跳过初始化")
       return
     }
 
@@ -60,7 +66,7 @@ class SchedulerService {
       },
       {
         scheduled: false,
-        timezone: "Asia/Shanghai",
+        timezone: config.SCHEDULER.TIMEZONE || "Asia/Shanghai",
       }
     )
 
@@ -111,7 +117,7 @@ class SchedulerService {
       },
       {
         scheduled: false,
-        timezone: "Asia/Shanghai",
+        timezone: config.SCHEDULER.TIMEZONE || "Asia/Shanghai",
       }
     )
 
@@ -149,6 +155,7 @@ class SchedulerService {
     }
 
     return {
+      enabled: Boolean(config.SCHEDULER && config.SCHEDULER.ENABLED),
       initialized: this.isInitialized,
       taskCount: this.tasks.size,
       tasks: taskStatus,

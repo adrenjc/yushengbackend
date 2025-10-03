@@ -86,12 +86,20 @@ RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX_REQUESTS=1000
 
 # ===========================================
+# 定时任务调度
+# ===========================================
+SCHEDULER_ENABLED=false
+SCHEDULER_TIMEZONE=Asia/Shanghai
+
+# ===========================================
 # 文件清理配置
 # ===========================================
 LOG_RETENTION_DAYS=7
 TEMP_FILE_RETENTION_HOURS=24
 UPLOAD_RETENTION_DAYS=3
 ```
+
+> 提示：默认关闭定时调度任务，如需启用请将 `SCHEDULER_ENABLED` 设置为 `true` 并确认脚本行为符合预期。
 
 ### `.env.production` (生产环境)
 
@@ -150,6 +158,12 @@ LEARNING_RATE=0.1
 # ===========================================
 RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX_REQUESTS=100
+
+# ===========================================
+# 定时任务调度
+# ===========================================
+SCHEDULER_ENABLED=false
+SCHEDULER_TIMEZONE=Asia/Shanghai
 
 # ===========================================
 # 文件清理配置

@@ -233,8 +233,12 @@ const startServer = async () => {
     await redisManager.initialize()
 
     // 初始化定时任务服务
-    logger.info("正在初始化定时任务服务...")
-    await schedulerService.initialize()
+    if (config.SCHEDULER && config.SCHEDULER.ENABLED) {
+      logger.info("正在初始化定时任务服务...")
+      await schedulerService.initialize()
+    } else {
+      logger.info("已跳过定时任务调度器初始化，SCHEDULER_ENABLED 未开启")
+    }
 
     // 启动HTTP服务器
     const server = app.listen(config.PORT, () => {
@@ -269,8 +273,10 @@ const startServer = async () => {
           await redisManager.disconnect()
           logger.info("Redis连接已关闭")
 
-          schedulerService.stopAll()
-          logger.info("定时任务服务已停止")
+          if (config.SCHEDULER && config.SCHEDULER.ENABLED) {
+            schedulerService.stopAll()
+            logger.info("定时任务服务已停止")
+          }
 
           logger.info("应用程序已优雅关闭")
           process.exit(0)
