@@ -142,7 +142,7 @@ if (config.NODE_ENV === "production") {
 /**
  * 健康检查端点
  */
-app.get("/health", async (req, res) => {
+const handleHealthCheck = async (req, res) => {
   const healthCheck = {
     status: "OK",
     timestamp: new Date().toISOString(),
@@ -157,14 +157,19 @@ app.get("/health", async (req, res) => {
 
   try {
     // 检查数据库连接
-    const dbHealth = await database.healthCheck()
-    healthCheck.services.database = dbHealth ? "healthy" : "unhealthy"
+    const databaseHealthy = await database.healthCheck()
+    healthCheck.services.database = databaseHealthy ? "healthy" : "unhealthy"
 
     // 检查Redis连接
-    const redisHealth = await redisClient.healthCheck()
-    healthCheck.services.redis = redisHealth ? "healthy" : "unhealthy"
+    const redisStatus = await redisManager.healthCheck()
+    healthCheck.services.redis = redisStatus.status
+    if (redisStatus.message) {
+      healthCheck.services.redisMessage = redisStatus.message
+    }
 
-    const allHealthy = dbHealth && redisHealth
+    const redisHealthy =
+      redisStatus.status === "healthy" || redisStatus.status === "disabled"
+    const allHealthy = databaseHealthy && redisHealthy
 
     res.status(allHealthy ? 200 : 503).json(healthCheck)
   } catch (error) {
@@ -172,6 +177,22 @@ app.get("/health", async (req, res) => {
     healthCheck.error = error.message
     res.status(503).json(healthCheck)
   }
+}
+
+app.get("/health", handleHealthCheck)
+app.get("/api/health", handleHealthCheck)
+
+/**
+ * 根路径介绍
+ */
+app.get("/", (req, res) => {
+  res.json({
+    name: config.APP_NAME,
+    version: "1.0.0",
+    description: "智能商品匹配系统服务正常运行",
+    health: "/health",
+    api: "/api",
+  })
 })
 
 /**
@@ -189,7 +210,10 @@ app.get("/api", (req, res) => {
       users: "/api/users",
     },
     documentation: "/api/docs",
-    health: "/health",
+    health: {
+      public: "/health",
+      internal: "/api/health",
+    },
   })
 })
 
