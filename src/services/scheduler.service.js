@@ -1,6 +1,6 @@
 /**
- * 定时任务服务
- * 管理系统的定时清理和维护任务
+ * 定时调度器服务
+ * 负责系统定时任务的注册与管理
  */
 
 const cron = require("node-cron")
@@ -22,7 +22,7 @@ class SchedulerService {
    */
   async initialize() {
     if (this.isInitialized) {
-      logger.warn("定时任务服务已经初始化")
+      logger.warn("定时调度器已初始化，跳过重复初始化")
       return
     }
 
@@ -31,37 +31,62 @@ class SchedulerService {
       return
     }
 
+    if (!this.shouldRunOnCurrentInstance()) {
+      return
+    }
+
     try {
-      // 每天凌晨3点执行文件清理
+      // 每天凌晨 3 点执行一次文件清理
       this.scheduleFileCleanup()
 
-      // 每小时生成一次统计报告（可选）
+      // 每天上午 8 点生成一次存储健康报告
       this.scheduleHealthCheck()
 
       this.isInitialized = true
-      logger.info("定时任务服务初始化成功", {
+      logger.info("定时调度器初始化完成", {
         taskCount: this.tasks.size,
       })
     } catch (error) {
-      logger.error("定时任务服务初始化失败", error)
+      logger.error("定时调度器初始化失败", error)
       throw error
     }
   }
 
   /**
-   * 调度文件清理任务
+   * 判断当前进程是否需要运行调度任务
+   */
+  shouldRunOnCurrentInstance() {
+    const instanceId = process.env.INSTANCE_ID
+    const pmId = process.env.pm_id
+
+    const isPrimary =
+      (instanceId === undefined || instanceId === "0") &&
+      (pmId === undefined || pmId === "0")
+
+    if (!isPrimary) {
+      logger.info("当前实例不是主实例，跳过定时任务初始化", {
+        instanceId,
+        pmId,
+      })
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * 注册文件清理任务
    */
   scheduleFileCleanup() {
-    // 每天凌晨3点执行
     const cleanupTask = cron.schedule(
       "0 3 * * *",
       async () => {
         logger.info("开始执行定时文件清理任务")
         try {
           const stats = await cleanupFiles()
-          logger.info("定时文件清理任务完成", stats)
+          logger.info("定时文件清理完成", stats)
         } catch (error) {
-          logger.error("定时文件清理任务失败", error)
+          logger.error("定时文件清理失败", error)
         }
       },
       {
@@ -73,28 +98,25 @@ class SchedulerService {
     this.tasks.set("fileCleanup", cleanupTask)
     cleanupTask.start()
 
-    logger.info("文件清理任务已调度 - 每天凌晨3点执行")
+    logger.info("文件清理任务已注册 - 每天 03:00 执行")
   }
 
   /**
-   * 调度健康检查任务
+   * 注册健康检查任务
    */
   scheduleHealthCheck() {
-    // 每天早上8点生成报告
     const healthTask = cron.schedule(
       "0 8 * * *",
       async () => {
-        logger.info("开始执行系统健康检查")
+        logger.info("开始执行系统存储健康检查")
         try {
           const report = await generateCleanupReport()
 
-          // 检查是否需要告警
           const logsSize = report.directories.logs.totalSizeMB
           const uploadsSize = report.directories.uploads.totalSizeMB
 
           if (logsSize > 1000) {
-            // 日志文件超过1GB
-            logger.warn("日志文件大小超过阈值", {
+            logger.warn("日志目录占用超过阈值", {
               currentSize: logsSize,
               threshold: 1000,
               unit: "MB",
@@ -102,17 +124,16 @@ class SchedulerService {
           }
 
           if (uploadsSize > 500) {
-            // 上传文件超过500MB
-            logger.warn("上传文件大小超过阈值", {
+            logger.warn("上传目录占用超过阈值", {
               currentSize: uploadsSize,
               threshold: 500,
               unit: "MB",
             })
           }
 
-          logger.info("系统健康检查完成", report)
+          logger.info("系统存储健康检查完成", report)
         } catch (error) {
-          logger.error("系统健康检查失败", error)
+          logger.error("系统存储健康检查失败", error)
         }
       },
       {
@@ -124,7 +145,7 @@ class SchedulerService {
     this.tasks.set("healthCheck", healthTask)
     healthTask.start()
 
-    logger.info("健康检查任务已调度 - 每天早上8点执行")
+    logger.info("存储健康检查任务已注册 - 每天 08:00 执行")
   }
 
   /**
@@ -142,7 +163,7 @@ class SchedulerService {
   }
 
   /**
-   * 获取任务状态
+   * 获取调度器状态
    */
   getStatus() {
     const taskStatus = {}
@@ -166,13 +187,13 @@ class SchedulerService {
    * 手动执行文件清理
    */
   async manualCleanup() {
-    logger.info("手动执行文件清理任务")
+    logger.info("管理员触发手动文件清理")
     try {
       const stats = await cleanupFiles()
-      logger.info("手动文件清理任务完成", stats)
+      logger.info("手动文件清理完成", stats)
       return stats
     } catch (error) {
-      logger.error("手动文件清理任务失败", error)
+      logger.error("手动文件清理失败", error)
       throw error
     }
   }
@@ -197,7 +218,7 @@ class SchedulerService {
       task.start()
     }
 
-    logger.info(`自定义任务已添加: ${name}`, {
+    logger.info(`自定义任务已注册: ${name}`, {
       cronExpression,
       autoStart: options.autoStart !== false,
     })
@@ -220,7 +241,7 @@ class SchedulerService {
   }
 }
 
-// 创建单例实例
+// 导出单例
 const schedulerService = new SchedulerService()
 
 module.exports = schedulerService
