@@ -14,6 +14,7 @@ const database = require("./config/database")
 const { redisManager } = require("./config/redis")
 const { logger, httpLogStream } = require("./utils/logger")
 const schedulerService = require("./services/scheduler.service")
+const healthMonitor = require("./utils/health-monitor")
 
 // 导入中间件
 const {
@@ -321,14 +322,19 @@ const startServer = async () => {
     process.on("SIGTERM", () => gracefulShutdown("SIGTERM"))
     process.on("SIGINT", () => gracefulShutdown("SIGINT"))
 
+    // 启动健康监控（每5分钟检查一次）
+    healthMonitor.start(5 * 60 * 1000)
+
     // 监听未捕获的异常
     process.on("uncaughtException", (error) => {
       logger.error("未捕获的异常:", error)
+      healthMonitor.logUncaughtException(error)
       gracefulShutdown("UNCAUGHT_EXCEPTION")
     })
 
     process.on("unhandledRejection", (reason, promise) => {
       logger.error("未处理的Promise拒绝:", { reason, promise })
+      healthMonitor.logUnhandledRejection(reason)
       gracefulShutdown("UNHANDLED_REJECTION")
     })
 

@@ -5,12 +5,13 @@ module.exports = {
       script: "src/app.js",
       instances: "max",
       exec_mode: "cluster",
-      max_memory_restart: "2G",
+      max_memory_restart: "1G", // 降低阈值以更早发现内存问题
       node_args: [
-        "--max-old-space-size=1536",
+        "--max-old-space-size=1024", // 降低堆内存限制
         "--optimize-for-size",
         "--max-http-header-size=8192",
-        "--gc-interval=200",
+        "--gc-interval=100", // 更频繁的 GC
+        "--expose-gc", // 允许手动 GC 诊断
       ],
       env: {
         NODE_ENV: "production",

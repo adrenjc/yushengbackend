@@ -66,25 +66,85 @@ class Database {
     // 连接断开事件
     mongoose.connection.on("disconnected", () => {
       this.isConnected = false
-      logger.warn("MongoDB连接已断开")
+      logger.warn("MongoDB连接已断开", {
+        readyState: mongoose.connection.readyState,
+        timestamp: new Date().toISOString(),
+      })
     })
 
     // 连接错误事件
     mongoose.connection.on("error", (error) => {
-      logger.error("MongoDB连接错误:", error)
+      logger.error("MongoDB连接错误:", {
+        message: error.message,
+        code: error.code,
+        timestamp: new Date().toISOString(),
+      })
     })
 
     // 重新连接事件
     mongoose.connection.on("reconnected", () => {
       this.isConnected = true
-      logger.info("MongoDB重新连接成功")
+      logger.info("MongoDB重新连接成功", {
+        timestamp: new Date().toISOString(),
+      })
     })
+
+    // 连接关闭事件
+    mongoose.connection.on("close", () => {
+      this.isConnected = false
+      logger.warn("MongoDB连接已关闭", {
+        timestamp: new Date().toISOString(),
+      })
+    })
+
+    // 启动心跳检测（每 5 分钟检查一次连接状态）
+    this.startHeartbeat()
 
     // 进程退出时关闭连接
     process.on("SIGINT", async () => {
+      this.stopHeartbeat()
       await this.disconnect()
       process.exit(0)
     })
+  }
+
+  /**
+   * 启动数据库心跳检测
+   */
+  startHeartbeat() {
+    if (this.heartbeatInterval) {
+      return // 已经在运行
+    }
+
+    this.heartbeatInterval = setInterval(async () => {
+      try {
+        const isHealthy = await this.healthCheck()
+        if (!isHealthy && this.isConnected) {
+          logger.warn("MongoDB心跳检测失败，连接可能异常", {
+            readyState: mongoose.connection.readyState,
+            timestamp: new Date().toISOString(),
+          })
+        }
+      } catch (error) {
+        logger.error("MongoDB心跳检测异常:", {
+          message: error.message,
+          timestamp: new Date().toISOString(),
+        })
+      }
+    }, 5 * 60 * 1000) // 5 分钟
+
+    // 确保不会阻止进程退出
+    this.heartbeatInterval.unref()
+  }
+
+  /**
+   * 停止心跳检测
+   */
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+      this.heartbeatInterval = null
+    }
   }
 
   /**

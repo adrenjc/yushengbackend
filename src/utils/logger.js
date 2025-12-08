@@ -40,7 +40,7 @@ class Logger {
   }
 
   /**
-   * 写入日志文件
+   * 写入日志文件（异步）
    */
   writeToFile(level, message, meta = {}) {
     const logFile = path.join(
@@ -49,11 +49,10 @@ class Logger {
     )
     const logMessage = this.formatMessage(level, message, meta) + "\n"
 
-    try {
-      fs.appendFileSync(logFile, logMessage)
-    } catch (error) {
-      console.error("Failed to write to log file:", error)
-    }
+    // 使用异步写入，避免阻塞 Event Loop
+    fs.appendFile(logFile, logMessage, (err) => {
+      if (err) console.error("Failed to write to log file:", err.message)
+    })
   }
 
   /**
@@ -151,9 +150,26 @@ const httpLogStream = {
   },
 }
 
+/**
+ * 调试日志（仅在开发环境输出）
+ * 用于替代 console.log 调试语句
+ */
+const isProduction = process.env.NODE_ENV === "production"
+const debugEnabled = process.env.DEBUG_LOG === "true"
+
+function debugLog(...args) {
+  // 生产环境默认关闭，除非显式开启
+  if (isProduction && !debugEnabled) {
+    return
+  }
+  console.log(...args)
+}
+
 module.exports = {
   logger,
   logOperation,
   logMatching,
   httpLogStream,
+  debugLog,
 }
+
